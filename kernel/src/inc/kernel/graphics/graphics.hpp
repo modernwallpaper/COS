@@ -4,10 +4,17 @@
 #include <limine.h>
 #include <stdint.h>
 
+// Graphics wraps the Limine framebuffer — a linear chunk of video memory
+// that we can write pixels to. The bootloader hands us this via the
+// LIMINE_FRAMEBUFFER_REQUEST.
+//
+// IMPORTANT: Never write to the framebuffer directly. Always use fb_ptr.
+// The framebuffer memory is mapped write-combining or uncacheable by the
+// firmware, and writing through a volatile pointer prevents the compiler
+// from optimizing away writes.
 class Graphics 
 {
 private:
-    // VERY IMPORTANT. NEVER WRITE TO THE FRAMEBUFFER DIRECTLY. INSTEAD USE THE POINTER (this->fb_ptr)
     limine_framebuffer *fb;
     volatile uint32_t *fb_ptr;
     

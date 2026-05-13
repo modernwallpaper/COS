@@ -123,6 +123,40 @@ run-hdd-loongarch64: edk2-ovmf $(IMAGE_NAME).hdd
 		$(QEMUFLAGS)
 
 
+.PHONY: debug
+debug: edk2-ovmf $(IMAGE_NAME).iso
+	qemu-system-$(ARCH) \
+		-M q35 \
+		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(ARCH).fd,readonly=on \
+		-cdrom $(IMAGE_NAME).iso \
+		-s -S \
+		$(QEMUFLAGS)
+
+.PHONY: debug-bios
+debug-bios: $(IMAGE_NAME).iso
+	qemu-system-$(ARCH) \
+		-M q35 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		-s -S \
+		$(QEMUFLAGS)
+
+.PHONY: debug-hdd-bios
+debug-hdd-bios: $(IMAGE_NAME).hdd
+	qemu-system-$(ARCH) \
+		-M q35 \
+		-hda $(IMAGE_NAME).hdd \
+		-s -S \
+		$(QEMUFLAGS)
+
+.PHONY: run-bios
+	qemu-system-$(ARCH) \
+		-M q35 \
+		-drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-$(ARCH).fd,readonly=on \
+		-cdrom $(IMAGE_NAME).iso \
+		-s -S \
+		$(QEMUFLAGS)
+
 .PHONY: run-bios
 run-bios: $(IMAGE_NAME).iso
 	qemu-system-$(ARCH) \

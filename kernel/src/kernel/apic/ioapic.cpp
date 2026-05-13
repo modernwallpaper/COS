@@ -1,0 +1,223 @@
+#include <cstdint>
+#include <inc/kernel/apic/ioapic.hpp>
+#include <inc/kernel/kshell/kshell.hpp>
+#include <inc/kernel/mem/buddy.hpp>
+#include <inc/kernel/mem/memory.hpp>
+#include <inc/kernel/ports/ports.hpp>
+
+#define IOAPIC_IOREGSEL 0x00
+#define IOAPIC_IOWIN    0x10
+
+#define IOAPIC_ID       0x00
+#define IOAPIC_VER      0x01
+#define IOAPIC_ARB      0x02
+#define IOAPIC_REDTBL   0x10
+
+#define IOAPIC_FIXED      0x0
+#define IOAPIC_LOWEST     0x1
+#define IOAPIC_SMI        0x2
+#define IOAPIC_NMI        0x4
+#define IOAPIC_INIT       0x5
+#define IOAPIC_EXTINT     0x7
+
+#define IOAPIC_DEST_PHYS  0x0
+#define IOAPIC_DEST_LOG   0x1
+#define IOAPIC_MASKED     (1 << 16)
+
+#define MADT_TYPE_IOAPIC      1
+#define MADT_TYPE_ISO         2
+
+struct acpi_rsdp {
+    char sig[8];
+    uint8_t checksum;
+    char oemid[6];
+    uint8_t revision;
+    uint32_t rsdt_addr;
+} __attribute__((packed));
+
+struct acpi_rsdp20 {
+    acpi_rsdp first;
+    uint32_t length;
+    uint64_t xsdt_addr;
+    uint8_t ext_checksum;
+    uint8_t reserved[3];
+} __attribute__((packed));
+
+struct acpi_sdt {
+    char sig[4];
+    uint32_t length;
+    uint8_t revision;
+    uint8_t checksum;
+    char oemid[6];
+    char oem_table_id[8];
+    uint32_t oem_revision;
+    uint32_t creator_id;
+    uint32_t creator_revision;
+} __attribute__((packed));
+
+struct acpi_madt {
+    acpi_sdt header;
+    uint32_t lapic_addr;
+    uint32_t flags;
+} __attribute__((packed));
+
+struct madt_entry_header {
+    uint8_t type;
+    uint8_t length;
+} __attribute__((packed));
+
+struct madt_ioapic {
+    madt_entry_header header;
+    uint8_t ioapic_id;
+    uint8_t reserved;
+    uint32_t ioapic_addr;
+    uint32_t gsi_base;
+} __attribute__((packed));
+
+struct madt_iso {
+    madt_entry_header header;
+    uint8_t bus;
+    uint8_t source;
+    uint32_t gsi;
+    uint16_t flags;
+} __attribute__((packed));
+
+IOAPIC::IOAPIC(KShell* kshell, Buddy* buddy, uint64_t hhdm_offset) {
+    this->kshell = kshell;
+    this->buddy = buddy;
+    this->hhdm_offset = hhdm_offset;
+    this->ioapic_phys = 0;
+    this->gsi_base = 0;
+    this->redir_count = 0;
+}
+
+IOAPIC::~IOAPIC() {}
+
+uint32_t IOAPIC::ioapic_read(uint8_t reg) {
+    *(volatile uint32_t*)(ioapic_phys) = reg;
+    return *(volatile uint32_t*)(ioapic_phys + IOAPIC_IOWIN);
+}
+
+void IOAPIC::ioapic_write(uint8_t reg, uint32_t value) {
+    *(volatile uint32_t*)(ioapic_phys) = reg;
+    *(volatile uint32_t*)(ioapic_phys + IOAPIC_IOWIN) = value;
+}
+
+void IOAPIC::set_irq_redirect(uint32_t irq, uint8_t vector, uint64_t dest_apic_id, bool masked) {
+    if (irq >= redir_count)
+        return;
+
+    uint8_t reg = IOAPIC_REDTBL + irq * 2;
+    uint32_t low = vector | IOAPIC_FIXED | IOAPIC_DEST_PHYS;
+    if (masked)
+        low |= IOAPIC_MASKED;
+    uint32_t high = (uint32_t)(dest_apic_id << 24);
+
+    ioapic_write(reg, low);
+    ioapic_write(reg + 1, high);
+}
+
+uintptr_t IOAPIC::find_madt(uintptr_t rsdp_virt) {
+    // rsdp_virt is already a higher-half virtual address from Limine.
+    acpi_rsdp* rsdp = (acpi_rsdp*)rsdp_virt;
+
+    uint32_t sdt_count;
+    uint32_t* sdt_ptrs;
+
+    if (rsdp->revision >= 2) {
+        acpi_rsdp20* rsdp20 = (acpi_rsdp20*)rsdp_virt;
+        // xsdt_addr inside the RSDP is a physical address → needs HHDM
+        acpi_sdt* xsdt = (acpi_sdt*)(rsdp20->xsdt_addr + hhdm_offset);
+        sdt_count = (xsdt->length - sizeof(acpi_sdt)) / 8;
+        sdt_ptrs = (uint32_t*)((uintptr_t)xsdt + sizeof(acpi_sdt));
+    } else {
+        // rsdt_addr inside the RSDP is a physical address → needs HHDM
+        acpi_sdt* rsdt = (acpi_sdt*)(rsdp->rsdt_addr + hhdm_offset);
+        sdt_count = (rsdt->length - sizeof(acpi_sdt)) / 4;
+        sdt_ptrs = (uint32_t*)((uintptr_t)rsdt + sizeof(acpi_sdt));
+    }
+
+    for (uint32_t i = 0; i < sdt_count; i++) {
+        uint64_t sdt_phys;
+        if (rsdp->revision >= 2) {
+            uint64_t* xsdt_ptrs = (uint64_t*)sdt_ptrs;
+            sdt_phys = xsdt_ptrs[i];
+        } else {
+            sdt_phys = sdt_ptrs[i];
+        }
+
+        acpi_sdt* sdt = (acpi_sdt*)(sdt_phys + hhdm_offset);
+        if (memcmp(sdt->sig, "APIC", 4) == 0)
+            return sdt_phys;
+    }
+
+    return 0;
+}
+
+bool IOAPIC::init(uint64_t lapic_id, uintptr_t rsdp_virt) {
+    if (rsdp_virt == 0) {
+        kshell->print_kernel_error("ACPI RSDP not found");
+        return false;
+    }
+    kshell->print_kernel_info("ACPI RSDP at %x", rsdp_virt);
+
+    uintptr_t madt_phys = find_madt(rsdp_virt);
+    if (madt_phys == 0) {
+        kshell->print_kernel_error("MADT not found");
+        return false;
+    }
+    kshell->print_kernel_info("MADT at %x", madt_phys);
+
+    acpi_madt* madt = (acpi_madt*)(madt_phys + hhdm_offset);
+    kshell->print_kernel_info("Local APIC addr from MADT: %x", madt->lapic_addr);
+
+    uintptr_t madt_end = madt_phys + madt->header.length;
+    uintptr_t entry_phys = madt_phys + sizeof(acpi_madt);
+
+    uintptr_t ioapic_found_phys = 0;
+
+    while (entry_phys < madt_end) {
+        madt_entry_header* hdr = (madt_entry_header*)(entry_phys + hhdm_offset);
+
+        if (hdr->type == MADT_TYPE_IOAPIC) {
+            madt_ioapic* ioapic_entry = (madt_ioapic*)hdr;
+            ioapic_found_phys = ioapic_entry->ioapic_addr;
+            gsi_base = ioapic_entry->gsi_base;
+
+            kshell->print_kernel_info("I/O APIC: id=%d addr=%x gsi_base=%d",
+                                      ioapic_entry->ioapic_id,
+                                      ioapic_entry->ioapic_addr,
+                                      ioapic_entry->gsi_base);
+        } else if (hdr->type == MADT_TYPE_ISO) {
+            madt_iso* iso = (madt_iso*)hdr;
+            kshell->print_kernel_info("  ISO: bus=%d source=%d -> gsi=%d flags=%x",
+                                      iso->bus, iso->source, iso->gsi, iso->flags);
+        }
+
+        if (hdr->length == 0) break;
+        entry_phys += hdr->length;
+    }
+
+    if (ioapic_found_phys == 0) {
+        kshell->print_kernel_error("No I/O APIC found in MADT");
+        return false;
+    }
+
+    ioapic_phys = ioapic_found_phys;
+
+    uint32_t ver = ioapic_read(IOAPIC_VER);
+    redir_count = (ver >> 16) & 0xFF;
+    kshell->print_kernel_info("I/O APIC version %d, %d redirection entries",
+                              ver & 0xFF, redir_count);
+
+    for (uint32_t i = 0; i < redir_count; i++)
+        set_irq_redirect(i, 0, 0, true);
+
+    set_irq_redirect(0, 32, lapic_id, false);
+    kshell->print_kernel_success("IRQ0 (PIT) routed through I/O APIC");
+
+    set_irq_redirect(1, 33, lapic_id, false);
+    kshell->print_kernel_success("IRQ1 (Keyboard) routed through I/O APIC");
+
+    return true;
+}

@@ -3,7 +3,20 @@
 #include <cstdint>
 #include <inc/kernel/kshell/kshell.hpp>
 
-// Standard GDT entry (64-bit)
+// In 64-bit long mode, segmentation is largely disabled. The GDT exists
+// mainly to set the DPL (ring level) for code/data segments and to hold
+// the Task State Segment (TSS) for interrupt stack switching.
+//
+// Layout:
+//   0 — Null descriptor (required)
+//   1 — Kernel code (ring 0, long mode)
+//   2 — Kernel data (ring 0)
+//   3 — User code   (ring 3, long mode)
+//   4 — User data   (ring 3)
+//   5 — TSS low     (IST entries for interrupt stacks)
+//   6 — TSS high
+
+// Standard 64-bit GDT entry
 struct gdt_entry_struct 
 {
     uint16_t limit_low;        // bits 0-15
@@ -14,21 +27,24 @@ struct gdt_entry_struct
     uint8_t  base_high;        // bits 56-63
 } __attribute__((packed));
 
-// Pointer to GDT
+// Pointer to GDT (used with lgdt instruction)
 struct gdt_ptr_struct 
 {
     uint16_t limit;
     uint64_t base;
 } __attribute__((packed));
 
-// High 64-bit part of TSS descriptor
+// High 64-bit part of TSS descriptor (TSS needs 2 consecutive GDT entries)
 struct gdt_entry_tss 
 {
     uint32_t base_high;        // bits 63-32 of base
     uint32_t reserved;
 } __attribute__((packed));
 
-// 64-bit TSS structure
+// 64-bit TSS structure.
+// The TSS no longer stores task state for task switching (that's gone in
+// long mode). Instead it holds RSP0 (kernel stack pointer for ring 0
+// entries) and IST (Interrupt Stack Table) pointers.
 struct tss_struct 
 {
     uint32_t reserved0;

@@ -6,6 +6,8 @@ global isr24,isr25,isr26,isr27,isr28,isr29,isr30,isr31
 global irq0,irq1,irq2,irq3,irq4,irq5,irq6,irq7
 global irq8,irq9,irq10,irq11,irq12,irq13,irq14,irq15
 
+global apic_timer_stub
+
 extern isr_handler
 
 ; ------------------------
@@ -135,3 +137,15 @@ IRQ_STUB 12
 IRQ_STUB 13
 IRQ_STUB 14
 IRQ_STUB 15
+
+; ------------------------
+; APIC Timer Stub
+; ------------------------
+%macro APIC_STUB 2
+%1:
+    push 0
+    push %2
+    jmp isr_common
+%endmacro
+
+APIC_STUB apic_timer_stub, 48

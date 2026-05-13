@@ -7,7 +7,7 @@
 IDT* global_idt;
 
 // --------------------
-// CPU exception stubs
+// CPU exception stubs — defined in idt.asm
 // --------------------
 extern "C" void isr0();  extern "C" void isr1();  extern "C" void isr2();  extern "C" void isr3();
 extern "C" void isr4();  extern "C" void isr5();  extern "C" void isr6();  extern "C" void isr7();
@@ -18,6 +18,7 @@ extern "C" void isr20(); extern "C" void isr21(); extern "C" void isr22(); exter
 extern "C" void isr24(); extern "C" void isr25(); extern "C" void isr26(); extern "C" void isr27();
 extern "C" void isr28(); extern "C" void isr29(); extern "C" void isr30(); extern "C" void isr31();
 
+// Lookup table mapping vector 0-31 to their stub entry points
 extern "C" void (*isr_table[32])() = {
     isr0,isr1,isr2,isr3,isr4,isr5,isr6,isr7,
     isr8,isr9,isr10,isr11,isr12,isr13,isr14,isr15,
@@ -26,7 +27,8 @@ extern "C" void (*isr_table[32])() = {
 };
 
 // --------------------
-// Hardware IRQ stubs
+// Hardware IRQ stubs — defined in idt.asm
+// IRQ 0-15 are mapped to vectors 32-47 by the PIC/APIC
 // --------------------
 extern "C" void irq0();  extern "C" void irq1();  extern "C" void irq2();  extern "C" void irq3();
 extern "C" void irq4();  extern "C" void irq5();  extern "C" void irq6();  extern "C" void irq7();
@@ -38,29 +40,78 @@ extern "C" void (*irq_table[16])() = {
     irq8,irq9,irq10,irq11,irq12,irq13,irq14,irq15
 };
 
+// APIC timer stub
+extern "C" void apic_timer_stub();
+
 // --------------------
-// ISR Handler
+// ISR Handler — C entry point for ALL interrupts
 // --------------------
 extern "C" void isr_handler(interrupt_frame* frame) 
 {
     if(frame->vector == 0) // divide by zero
     {
-        frame->rip += 2; // skip offending instruction
-    } 
+        // Skip the offending instruction (2 bytes for DIV/IDIV)
+        frame->rip += 2;
+    }
+    else if(frame->vector == 13) // general protection fault
+    {
+        serial_print("\n[ERROR] GPF at RIP=");
+        serial_print_hex(frame->rip);
+        serial_print(", error=");
+        serial_print_hex(frame->error);
+        serial_print("\n");
+        global_idt->kshell->print_kernel_error(
+            "GPF at RIP=%x, error=%x (selector=%x) (ext=%s) (idt=%s)",
+            frame->rip, frame->error,
+            frame->error & 0xFFF8,
+            (frame->error & 1) ? "yes" : "no",
+            (frame->error & 2) ? "yes" : "no"
+        );
+        while(true) asm volatile("hlt");
+    }
+    else if(frame->vector == 14) // page fault
+    {
+        uint64_t cr2;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        global_idt->kshell->print_kernel_error(
+            "Page fault at RIP=%x, fault addr=%x, error=%x%s%s%s",
+            frame->rip, cr2, frame->error,
+            (frame->error & 1) ? " (protection)" : " (not-present)",
+            (frame->error & 2) ? " write" : " read",
+            (frame->error & 4) ? " user" : " supervisor"
+        );
+        while(true) asm volatile("hlt");
+    }
     else if(frame->vector >= 32 && frame->vector <= 47)
     {
-        irq_handler(frame); // forward IRQ to separate handler
+        irq_handler(frame); // forward hardware IRQs
+    }
+    else if(frame->vector == 48)
+    {
+        // APIC timer fired — acknowledge by reading the LAPIC EOI register
+        // (writing any value to 0x0B0 signals EOI to the local APIC)
+        *(volatile uint32_t *)0xFEE000B0 = 0;
     }
     else
     {
-        global_idt->print_interrupt_message(
-            "No handler for interrupt vector %d, halting CPU...", frame->vector
+        // Unhandled exception — print RIP and halt
+        serial_print("\n[ERROR] Unhandled exception vector ");
+        serial_print_hex(frame->vector);
+        serial_print(" at RIP=");
+        serial_print_hex(frame->rip);
+        serial_print(", error=");
+        serial_print_hex(frame->error);
+        serial_print("\n");
+        global_idt->kshell->print_kernel_error(
+            "Unhandled exception vector %d at RIP=%x, error=%x",
+            frame->vector, frame->rip, frame->error
         );
         while(true) asm volatile("hlt");
     }
 }
 
-// Example IRQ handler
+// IRQ handler — called for vectors 32-47 (hardware interrupts).
+// Sends EOI to the PIC so it can fire again.
 extern "C" void irq_handler(interrupt_frame* frame) 
 {
     global_idt->print_interrupt_message("IRQ vector %d fired", frame->vector);
@@ -69,32 +120,38 @@ extern "C" void irq_handler(interrupt_frame* frame)
 }
 
 // --------------------
-// IDT class implementation
+// IDT class
 // --------------------
+
 IDT::IDT(KShell* kshell) 
 {
     this->kshell = kshell;
     global_idt = this;
 
-    // CPU exceptions
+    // CPU exceptions 0-31
     for(int i=0;i<32;i++)
         set_idt_gate(i, (void*)isr_table[i]);
 
-    // Hardware IRQs 0–15 → vectors 32–47
+    // Hardware IRQs 0-15 → vectors 32-47
     for(int i=0;i<16;i++)
         set_idt_gate(32+i, (void*)irq_table[i]);
 
+    // APIC timer → vector 48
+    set_idt_gate(48, (void*)apic_timer_stub);
+
     this->load_idt();
-    asm volatile("sti");
+    asm volatile("sti"); // enable interrupts
 }
 
+// Populate a single IDT entry with a handler address.
+// All entries use ring 0, interrupt gate type.
 void IDT::set_idt_gate(int n, void* handler) 
 {
     uint64_t addr = (uint64_t)handler;
     idt[n].offset_low = addr & 0xFFFF;
-    idt[n].selector = 0x08; // kernel code segment
+    idt[n].selector = 0x08; // kernel code segment (GDT entry 1)
     idt[n].ist = 0;
-    idt[n].type_attributes = 0x8E; // interrupt gate
+    idt[n].type_attributes = 0x8E; // present, ring 0, interrupt gate
     idt[n].offset_mid = (addr >> 16) & 0xFFFF;
     idt[n].offset_high = (addr >> 32) & 0xFFFFFFFF;
     idt[n].zero = 0;

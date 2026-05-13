@@ -75,6 +75,9 @@ SECTIONS
         *(COMMON)
     } :data
 
+    /* Linker symbol where the kernel ends */
+    _end = .;
+
     /* Discard .note.* and .eh_frame* since they may cause issues on some hosts. */
     /DISCARD/ : {
         *(.eh_frame*)

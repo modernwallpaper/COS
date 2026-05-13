@@ -5,6 +5,11 @@
 #include <inc/kernel/kfont/font.hpp>
 #include <inc/kernel/mem/memory.hpp>
 
+// KShell: A minimal framebuffer text console.
+// Characters are rendered from a fixed 8x16 bitmap font (see kfont/).
+// The screen scrolls up by one line when the cursor reaches the bottom.
+// Newlines, tabs, and backspace are all handled.
+
 KShell::KShell(Graphics* graphics)
 {
     this->graphics = graphics;
@@ -42,6 +47,9 @@ void KShell::set_background_color(uint32_t color)
     this->background_color = color;
 }
 
+// Scroll the screen up by one character row.
+// Each pixel row is shifted up by char_height, and the new
+// bottom row is filled with the background color.
 void KShell::scroll()
 {
     for (uint64_t y = 0; y < max_height - char_height; y++)
@@ -64,7 +72,9 @@ void KShell::scroll()
     cursor_pos_y -= char_height;
 }
 
-
+// Render a single character at the cursor position using the 8x16
+// bitmap font. Each character in the font array has 16 bytes, one
+// per pixel row. Each bit in a byte represents one pixel column.
 void KShell::draw_char(char c)
 {
     if (cursor_pos_x >= max_width - safeguard_width)
@@ -90,6 +100,7 @@ void KShell::draw_char(char c)
     cursor_pos_x += char_width;
 }
 
+// Erase the character before the cursor and move back.
 void KShell::backspace()
 {
     if (cursor_pos_x == 0)
@@ -111,6 +122,13 @@ void KShell::backspace()
         }
     }
 }
+
+// --- Colored kernel log helpers ---
+// Each prints a colored prefix, then the formatted message, then a newline.
+// [i]     = info (cyan)
+// [OK]    = success (green)
+// [WARN]  = warning (yellow)
+// [ERROR] = error (red)
 
 void KShell::vprint_kernel_info(const char* fmt, va_list args)
 {
@@ -195,6 +213,8 @@ void KShell::print_kernel_error(const char* fmt, ...)
     this->vprint_kernel_error(fmt, args);
     va_end(args);
 }
+
+// Main formatted print. Wraps vprint with va_list setup.
 void KShell::print(const char* fmt, ...)
 {
     va_list args;
@@ -203,6 +223,12 @@ void KShell::print(const char* fmt, ...)
     va_end(args);
 }
 
+// Core format-string parser. Walks the format string character by
+// character. Plain characters are drawn directly; % sequences
+// consume va_args and format the value accordingly.
+//
+// Supported: %s %d %u %x %llu %b %c %p %%
+// NOTE: %x, %d, and %u read 32-bit values. For 64-bit, use %llu.
 void KShell::vprint(const char* fmt, va_list args)
 {
     for (int i = 0; fmt[i] != '\0'; i++) 

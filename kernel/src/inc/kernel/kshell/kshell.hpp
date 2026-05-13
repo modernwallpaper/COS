@@ -4,6 +4,12 @@
 #include <limine.h>
 #include <stdint.h>
 
+// KShell is a simple framebuffer-based terminal. It draws text using
+// the bitmap font from kfont/, scrolls the screen when full, and
+// supports color-coded kernel log messages ([i], [OK], [WARN], [ERROR]).
+//
+// Format specifiers: %s %d %u %x %llu %b %c %p %%
+// NOTE: %x/%d read 32-bit va_args — be careful when passing uint64_t.
 class KShell 
 {
 private:

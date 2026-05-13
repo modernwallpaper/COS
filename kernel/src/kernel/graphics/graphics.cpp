@@ -4,6 +4,11 @@
 #include <inc/kernel/graphics/graphics.hpp>
 #include <inc/kernel/kfont/font.hpp>
 
+// The framebuffer is a 2D array of pixels. Each pixel is 32 bits
+// (BGRA or RGBA depending on firmware). The pitch is the number of
+// bytes per row, which may be larger than width*4 due to alignment.
+// We always use pitch/4 as the row stride, NOT max_width.
+
 Graphics::Graphics(limine_framebuffer *fb) 
 {
     this->fb                = fb;
@@ -25,19 +30,24 @@ uint64_t Graphics::get_max_height()
     return this->max_height;
 }
 
+// Draw a single pixel. Bounds-checked to avoid writing past the end
+// of the framebuffer.
+// The pitch (bytes per row) may be larger than width*4, so we divide
+// by 4 to get the number of pixels per row.
 void Graphics::draw_pixel(uint32_t color, uint64_t x, uint64_t y)
 {
     if (x >= max_width || y >= max_height) return;
     this->fb_ptr[y * (this->fb->pitch / 4) + x] = color; 
 }
 
+// Read back a pixel value. Uses the same stride calculation as draw_pixel.
 uint32_t Graphics::get_pixel(uint64_t x, uint64_t y)
 {
     if (x >= max_width || y >= max_height) return 0;
     return fb_ptr[y * (this->fb->pitch / 4) + x];
 }
 
-
+// Fill the entire screen with a single color.
 void Graphics::clear_screen(uint32_t color)
 {
     for (uint64_t y = 0; y < max_height; y++)
@@ -49,7 +59,9 @@ void Graphics::clear_screen(uint32_t color)
     }
 }
 
-// Bresenham's line algorithm
+// Bresenham's line algorithm — integer-only, no floating point.
+// Draws a line between any two points using only addition/subtraction.
+// Works in all octants by tracking an error term.
 void Graphics::draw_line(uint32_t color, uint64_t p1x, uint64_t p1y, uint64_t p2x, uint64_t p2y)
 {
     int64_t x1 = (int64_t)p1x;
