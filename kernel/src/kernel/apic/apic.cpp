@@ -1,5 +1,7 @@
 #include <cstdint>
 #include <inc/kernel/apic/apic.hpp>
+
+Apic* global_apic = nullptr;
 #include <inc/kernel/hpet/hpet.hpp>
 
 Apic::Apic(KShell* kshell)
@@ -14,6 +16,7 @@ Apic::Apic(KShell* kshell)
 
     this->apic_base = this->cpu_get_apic_base();
     this->cpu_set_apic_base(this->apic_base);
+    global_apic = this;
 }
 
 Apic::~Apic()
@@ -112,4 +115,29 @@ void Apic::calibrate(HPET* hpet)
 
     uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
     calibrated_10ms = test_count - remaining;
+}
+
+void Apic::send_ipi(uint8_t lapic_id, uint32_t icr_low)
+{
+    while (lapic_read(LAPIC_ICR_LOW) & ICR_DELIVERY_PENDING)
+        ;
+    lapic_write(LAPIC_ICR_HIGH, (uint32_t)lapic_id << 24);
+    lapic_write(LAPIC_ICR_LOW, icr_low);
+}
+
+void Apic::send_init_ipi(uint8_t lapic_id)
+{
+    send_ipi(lapic_id, ICR_DELIVERY_INIT);
+}
+
+void Apic::send_sipi(uint8_t lapic_id, uint8_t vector)
+{
+    send_ipi(lapic_id, ICR_DELIVERY_SIPI | vector);
+}
+
+void Apic::send_self_ipi(uint8_t vector)
+{
+    while (lapic_read(LAPIC_ICR_LOW) & ICR_DELIVERY_PENDING)
+        ;
+    lapic_write(LAPIC_ICR_LOW, vector | ICR_DEST_SELF);
 }

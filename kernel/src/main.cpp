@@ -16,6 +16,7 @@
 #include <inc/kernel/mem/page_meta.hpp>
 #include <inc/kernel/ports/ports.hpp>
 #include <inc/kernel/sched/task.hpp>
+#include <inc/kernel/smp/smp.hpp>
 #include <inc/kernel/tests/selftests.hpp>
 
 namespace
@@ -55,6 +56,10 @@ __attribute__((used, section(".limine_requests")))
 
 volatile limine_rsdp_request rsdp_request = {
     .id = LIMINE_RSDP_REQUEST_ID, .revision = 0, .response = nullptr};
+
+__attribute__((used, section(".limine_requests")))
+volatile limine_mp_request mp_request = {
+    .id = LIMINE_MP_REQUEST_ID, .revision = 0, .response = nullptr, .flags = 0};
 
 } // namespace
 
@@ -419,6 +424,26 @@ extern "C" void kmain()
     serial_print("timer arm ok\n");
 
     kshell.print_kernel_info("Scheduler running at 100 Hz");
+
+    serial_print("smp init...\n");
+    smp_init(&kshell, &apic, mp_request.response, hhdm_offset);
+    serial_print("smp init ok\n");
+
+    task* smp_info_test_task =
+        scheduler.create_kthread(smp_info_test_thread, "smp_info_test");
+    if (smp_info_test_task)
+    {
+        scheduler.add_task(smp_info_test_task);
+        kshell.print_kernel_success("Created SMP info test thread");
+    }
+
+    task* smp_ipi_test_task =
+        scheduler.create_kthread(smp_ipi_test_thread, "smp_ipi_test");
+    if (smp_ipi_test_task)
+    {
+        scheduler.add_task(smp_ipi_test_task);
+        kshell.print_kernel_success("Created SMP IPI test thread");
+    }
 
     kshell.print_kernel_info(
         "Holy shit, we actually got here without tripple-faulting");

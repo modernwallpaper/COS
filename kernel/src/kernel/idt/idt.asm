@@ -7,6 +7,8 @@ global irq0,irq1,irq2,irq3,irq4,irq5,irq6,irq7
 global irq8,irq9,irq10,irq11,irq12,irq13,irq14,irq15
 
 global apic_timer_stub
+global yield_stub
+global ipi_test_stub
 
 extern isr_handler
 extern scheduler_switch_if_needed
@@ -66,10 +68,14 @@ isr_common:
     mov rdi, rsp        ; pointer to interrupt_frame
     call isr_handler
 
-    ; Only invoke the scheduler for the APIC timer (vector 48).
+    ; Invoke the scheduler for the APIC timer (vector 48) and yield (vector 49).
     ; The interrupt frame sits above the 15 GPR pushes: [rsp+15*8] = vector.
-    cmp qword [rsp + 15*8], 48
+    mov rax, [rsp + 15*8]
+    cmp rax, 48
+    je .sched
+    cmp rax, 49
     jne .restore
+.sched:
     mov rdi, rsp
     call scheduler_switch_if_needed
     mov rsp, rax        ; switch to new task's stack if needed
@@ -161,3 +167,13 @@ IRQ_STUB 15
 %endmacro
 
 APIC_STUB apic_timer_stub, 48
+
+; ------------------------
+; Yield Stub (software int)
+; ------------------------
+APIC_STUB yield_stub, 49
+
+; ------------------------
+; IPI Test Stub (vector 50)
+; ------------------------
+APIC_STUB ipi_test_stub, 50

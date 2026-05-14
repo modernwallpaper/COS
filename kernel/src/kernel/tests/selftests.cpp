@@ -4,6 +4,8 @@
 #include <inc/kernel/mem/kmalloc.hpp>
 #include <inc/kernel/ports/ports.hpp>
 #include <inc/kernel/sched/task.hpp>
+#include <inc/kernel/smp/smp.hpp>
+#include <inc/kernel/apic/apic.hpp>
 #include <inc/kernel/tests/selftests.hpp>
 
 namespace
@@ -126,4 +128,75 @@ void sleep_test_thread()
 
     while (true)
         sleep_ms(1000);
+}
+
+void smp_info_test_thread()
+{
+    sleep_ms(100);
+
+    bool cpu_count_ok = cpu_count >= 1;
+    print_result("SMP: cpu_count >= 1", cpu_count_ok);
+
+    bool ids_valid = true;
+    for (uint64_t i = 0; i < cpu_count; i++)
+    {
+        if (cpu_infos[i].lapic_id == 0 && !cpu_infos[i].bsp)
+        {
+            ids_valid = false;
+            break;
+        }
+    }
+    print_result("SMP: all CPUs have valid LAPIC IDs", ids_valid);
+
+    uint64_t bsp_count = 0;
+    uint64_t bsp_idx = 0;
+    for (uint64_t i = 0; i < cpu_count; i++)
+    {
+        if (cpu_infos[i].bsp)
+        {
+            bsp_count++;
+            bsp_idx = i;
+        }
+    }
+    print_result("SMP: exactly one BSP", bsp_count == 1);
+
+    bool all_online = true;
+    for (uint64_t i = 0; i < cpu_count; i++)
+        if (!cpu_infos[i].online)
+            all_online = false;
+    print_result("SMP: all CPUs online", all_online);
+
+    print_result("SMP: BSP has no pre-allocated stack",
+                 cpu_infos[bsp_idx].stack_base == 0);
+
+    bool stacks_ok = true;
+    for (uint64_t i = 0; i < cpu_count; i++)
+    {
+        if (!cpu_infos[i].bsp && cpu_infos[i].stack_base == 0)
+        {
+            stacks_ok = false;
+            break;
+        }
+    }
+    print_result("SMP: all APs have pre-allocated stacks", stacks_ok);
+
+    while (true)
+        sleep_ms(10000);
+}
+
+void smp_ipi_test_thread()
+{
+    sleep_ms(200);
+
+    // Test self-IPI: send IPI to self and verify it's received.
+    // This validates the APIC IPI path used for SMP wakeup.
+    cpu_infos[0].ipi_count = 0;
+    global_apic->send_self_ipi(50);
+    for (int d = 0; d < 100000; d++)
+        asm volatile("pause" : : : "memory");
+    bool self_ipi_ok = (cpu_infos[0].ipi_count == 1);
+    print_result("SMP: self-IPI received", self_ipi_ok);
+
+    while (true)
+        sleep_ms(10000);
 }

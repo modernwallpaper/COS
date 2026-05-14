@@ -32,6 +32,7 @@ public:
     task* create_kthread(void (*entry)(), const char* name, bool idle = false);
     uint64_t switch_if_needed(interrupt_frame* frame);
     void on_tick();
+    void yield();
     void sleep_ms(uint64_t ms);
 
     uint64_t ticks() const

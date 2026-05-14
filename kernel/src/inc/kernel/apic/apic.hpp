@@ -15,10 +15,20 @@
 #define LAPIC_TIMER_ICR 0x380
 #define LAPIC_TIMER_CCR 0x390
 #define LAPIC_TIMER_DCR 0x3E0
+#define LAPIC_ICR_LOW  0x300
+#define LAPIC_ICR_HIGH 0x310
 
 #define LAPIC_SVR_ENABLE (1 << 8)
 #define LAPIC_TIMER_PERIODIC (1 << 17)
 #define LAPIC_TIMER_MASKED (1 << 16)
+
+#define ICR_DELIVERY_FIXED  0
+#define ICR_DELIVERY_INIT   (5 << 8)
+#define ICR_DELIVERY_SIPI   (6 << 8)
+#define ICR_DEST_SELF       (1 << 18)
+#define ICR_DEST_ALL        (2 << 18)
+#define ICR_DEST_ALL_EXCL   (3 << 18)
+#define ICR_DELIVERY_PENDING (1 << 12)
 
 class HPET;
 
@@ -48,4 +58,11 @@ public:
     {
         return calibrated_10ms / 10;
     }
+
+    void send_ipi(uint8_t lapic_id, uint32_t icr_low);
+    void send_init_ipi(uint8_t lapic_id);
+    void send_sipi(uint8_t lapic_id, uint8_t vector);
+    void send_self_ipi(uint8_t vector);
 };
+
+extern Apic* global_apic;

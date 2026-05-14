@@ -127,6 +127,19 @@ uint64_t Scheduler::switch_if_needed(interrupt_frame* frame)
     return (uint64_t)frame;
 }
 
+void Scheduler::yield()
+{
+    // Trigger a software interrupt (vector 49) that enters the scheduler.
+    // The scheduler saves our full context (all GPRs + iretq frame) and
+    // picks the next ready task. When we're rescheduled, execution
+    // continues here with all register state intact.
+    //
+    // This uses the exact same interrupt-driven context-switch path as
+    // the APIC timer (vector 48), so the saved RSP is fully compatible
+    // with timer preemption — the two mechanisms can be mixed freely.
+    asm volatile("int $49" ::: "memory");
+}
+
 void Scheduler::sleep_ms(uint64_t ms)
 {
     if (current_task == nullptr || current_task->idle)
@@ -136,13 +149,18 @@ void Scheduler::sleep_ms(uint64_t ms)
     if (ticks_to_sleep == 0)
         ticks_to_sleep = 1;
 
+    // Atomically set wakeup time and state so a timer tick never sees
+    // TASK_SLEEPING with a stale (zero) wake_tick.
     asm volatile("cli" ::: "memory");
     current_task->wake_tick = tick_count + ticks_to_sleep;
     current_task->state = TASK_SLEEPING;
     asm volatile("sti" ::: "memory");
 
-    while (current_task->state == TASK_SLEEPING)
-        asm volatile("hlt" ::: "memory");
+    // Yield immediately. The scheduler saves our context and picks
+    // another task. On each timer tick, on_tick() checks whether
+    // tick_count >= wake_tick and sets us back to TASK_READY. Once
+    // ready, the scheduler will resume us here and sleep_ms returns.
+    yield();
 }
 
 task* Scheduler::create_kthread(void (*entry)(), const char* name, bool idle)

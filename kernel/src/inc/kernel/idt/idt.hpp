@@ -44,11 +44,10 @@ struct interrupt_frame {
 };
 
 class IDT {
-private:
+public:
     IDT_entry_struct idt[256];
     IDTR idtr;
 
-public:
     KShell* kshell;
     IDT(KShell* kshell);
     void load_idt();

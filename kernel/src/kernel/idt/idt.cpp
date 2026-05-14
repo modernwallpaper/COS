@@ -4,6 +4,7 @@
 #include <inc/kernel/kshell/kshell.hpp>
 #include <inc/kernel/ports/ports.hpp>
 #include <inc/kernel/sched/task.hpp>
+#include <inc/kernel/smp/smp.hpp>
 
 IDT* global_idt;
 
@@ -76,6 +77,9 @@ static void (*irq_table[16])() = {irq0,  irq1,  irq2,  irq3, irq4,  irq5,
 
 // APIC timer stub
 extern "C" void apic_timer_stub();
+// Yield stub (software interrupt)
+extern "C" void yield_stub();
+extern "C" void ipi_test_stub();
 
 // --------------------
 // ISR Handler — C entry point for ALL interrupts
@@ -131,6 +135,23 @@ extern "C" void isr_handler(interrupt_frame* frame)
     else if (frame->vector == 48)
     {
         scheduler_on_tick();
+        *(volatile uint32_t*)0xFEE000B0 = 0;
+    }
+    else if (frame->vector == 49)
+    {
+        // Yield: no tick increment, no EOI needed
+    }
+    else if (frame->vector == 50)
+    {
+        uint8_t lapic_id = *(volatile uint32_t*)0xFEE00020 >> 24;
+        for (uint64_t i = 0; i < cpu_count; i++)
+        {
+            if (cpu_infos[i].lapic_id == lapic_id)
+            {
+                cpu_infos[i].ipi_count++;
+                break;
+            }
+        }
         *(volatile uint32_t*)0xFEE000B0 = 0;
     }
     else
@@ -192,6 +213,12 @@ IDT::IDT(KShell* kshell)
 
     // APIC timer → vector 48
     set_idt_gate(48, (void*)apic_timer_stub);
+
+    // Software yield → vector 49
+    set_idt_gate(49, (void*)yield_stub);
+
+    // IPI test -> vector 50
+    set_idt_gate(50, (void*)ipi_test_stub);
 
     this->load_idt();
     asm volatile("sti"); // enable interrupts
