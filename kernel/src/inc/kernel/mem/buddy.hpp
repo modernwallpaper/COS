@@ -15,7 +15,10 @@ public:
     uintptr_t alloc(int order);
     void free(uintptr_t addr, int order);
 
-    uint64_t total_free() const { return total_free_pages; }
+    uint64_t total_free() const
+    {
+        return total_free_pages;
+    }
 
 private:
     struct Node {

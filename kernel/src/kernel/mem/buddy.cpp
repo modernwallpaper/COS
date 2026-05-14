@@ -2,19 +2,24 @@
 #include <inc/kernel/mem/buddy.hpp>
 #include <inc/kernel/pmm/pmm.hpp>
 
-Buddy::Buddy(PMM* pmm, uint64_t hhdm_offset) {
+Buddy::Buddy(PMM* pmm, uint64_t hhdm_offset)
+{
     this->pmm = pmm;
     this->hhdm_offset = hhdm_offset;
     this->total_free_pages = 0;
-    for (int i = 0; i <= MAX_ORDER; i++) {
+    for (int i = 0; i <= MAX_ORDER; i++)
+    {
         free_lists[i] = nullptr;
         free_counts[i] = 0;
     }
 }
 
-Buddy::~Buddy() {}
+Buddy::~Buddy()
+{
+}
 
-uintptr_t Buddy::alloc(int order) {
+uintptr_t Buddy::alloc(int order)
+{
     if (order > MAX_ORDER)
         return 0;
 
@@ -30,20 +35,24 @@ uintptr_t Buddy::alloc(int order) {
     return 0;
 }
 
-void Buddy::free(uintptr_t addr, int order) {
+void Buddy::free(uintptr_t addr, int order)
+{
     if (addr == 0 || order > MAX_ORDER)
         return;
 
     Node* node = (Node*)(addr + hhdm_offset);
 
     // Try to coalesce with the buddy at this order (if not at max)
-    if (order < MAX_ORDER) {
+    if (order < MAX_ORDER)
+    {
         uintptr_t buddy_addr = addr ^ (1ULL << (order + 12));
         Node** prev_ptr = &free_lists[order];
         Node* curr = free_lists[order];
 
-        while (curr) {
-            if (curr->addr == buddy_addr) {
+        while (curr)
+        {
+            if (curr->addr == buddy_addr)
+            {
                 // Buddy is free! Remove it and coalesce one level up.
                 *prev_ptr = curr->next;
                 free_counts[order]--;
@@ -64,11 +73,13 @@ void Buddy::free(uintptr_t addr, int order) {
     total_free_pages += (1ULL << order);
 }
 
-uintptr_t Buddy::split_alloc(int order) {
+uintptr_t Buddy::split_alloc(int order)
+{
     if (order > MAX_ORDER)
         return 0;
 
-    for (int higher = order; higher <= MAX_ORDER; higher++) {
+    for (int higher = order; higher <= MAX_ORDER; higher++)
+    {
         if (free_lists[higher] == nullptr)
             continue;
 
@@ -81,7 +92,8 @@ uintptr_t Buddy::split_alloc(int order) {
         uintptr_t block_addr = block->addr;
 
         // Split down to the desired order
-        for (int o = higher - 1; o >= order; o--) {
+        for (int o = higher - 1; o >= order; o--)
+        {
             uintptr_t half_size = 1ULL << (o + 12);
             uintptr_t upper_half = block_addr + half_size;
 

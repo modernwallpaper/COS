@@ -17,14 +17,16 @@
 #include <inc/kernel/ports/ports.hpp>
 #include <inc/kernel/sched/task.hpp>
 
-namespace {
+namespace
+{
 
 __attribute__((used, section(".limine_requests"))) volatile std::uint64_t
     limine_base_revision[] = LIMINE_BASE_REVISION(5);
 
 }
 
-namespace {
+namespace
+{
 
 __attribute__((used, section(".limine_requests")))
 
@@ -55,7 +57,8 @@ volatile limine_rsdp_request rsdp_request = {
 
 } // namespace
 
-namespace {
+namespace
+{
 
 __attribute__((used, section(".limine_requests_start"))) volatile std::uint64_t
     limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
@@ -65,10 +68,13 @@ __attribute__((used, section(".limine_requests_end"))) volatile std::uint64_t
 
 } // namespace
 
-namespace {
+namespace
+{
 
-void hcf() {
-    for (;;) {
+void hcf()
+{
+    for (;;)
+    {
 #if defined(__x86_64__)
         asm("hlt");
 #elif defined(__aarch64__) || defined(__riscv)
@@ -82,9 +88,15 @@ void hcf() {
 } // namespace
 
 extern "C" {
-int __cxa_atexit(void (*)(void *), void *, void *) { return 0; }
-void __cxa_pure_virtual() { hcf(); }
-void *__dso_handle;
+int __cxa_atexit(void (*)(void*), void*, void*)
+{
+    return 0;
+}
+void __cxa_pure_virtual()
+{
+    hcf();
+}
+void* __dso_handle;
 }
 
 extern void (*__init_array[])();
@@ -93,24 +105,31 @@ extern void (*__init_array_end[])();
 constexpr uint64_t KERNEL_STACK_SIZE = 0x4000; // 16 KB
 alignas(4096) uint8_t kernel_stack[KERNEL_STACK_SIZE];
 
-static void thread_a() {
+static void thread_a()
+{
     serial_print("[SCHED] thread_a entered\n");
-    while (true) {
+    while (true)
+    {
     }
 }
 
-static void thread_b() {
+static void thread_b()
+{
     serial_print("[SCHED] thread_b entered\n");
-    while (true) {
+    while (true)
+    {
     }
 }
 
-extern "C" void kmain() {
-    if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
+extern "C" void kmain()
+{
+    if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false)
+    {
         hcf();
     }
 
-    for (std::size_t i = 0; &__init_array[i] != __init_array_end; i++) {
+    for (std::size_t i = 0; &__init_array[i] != __init_array_end; i++)
+    {
         __init_array[i]();
     }
 
@@ -118,11 +137,12 @@ extern "C" void kmain() {
     serial_print("booting...\n");
 
     if (framebuffer_request.response == nullptr ||
-        framebuffer_request.response->framebuffer_count < 1) {
+        framebuffer_request.response->framebuffer_count < 1)
+    {
         hcf();
     }
 
-    limine_framebuffer *framebuffer =
+    limine_framebuffer* framebuffer =
         framebuffer_request.response->framebuffers[0];
 
     Graphics graphics(framebuffer);
@@ -131,12 +151,16 @@ extern "C" void kmain() {
     kshell.print_kernel_success("Initialized graphics");
     kshell.print_kernel_success("KShell initialized, before memmap loop");
 
-    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++) {
+    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++)
+    {
         auto entry = memmap_request.response->entries[i];
-        if (i % 2 == 0) {
+        if (i % 2 == 0)
+        {
             kshell.print("base=%x, length=%x, type=%x", entry->base,
                          entry->length, entry->type);
-        } else {
+        }
+        else
+        {
             kshell.print("\tbase=%x, length=%x, type=%x\n", entry->base,
                          entry->length, entry->type);
         }
@@ -153,7 +177,8 @@ extern "C" void kmain() {
     uint64_t pmm_stack_phys = 0;
     uint64_t pmm_stack_size = 1048576;
     uint64_t needed = pmm_stack_size * sizeof(uintptr_t);
-    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++) {
+    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++)
+    {
         auto entry = memmap_request.response->entries[i];
         if (entry->type != LIMINE_MEMMAP_USABLE)
             continue;
@@ -163,27 +188,34 @@ extern "C" void kmain() {
         if (region_start >= region_end)
             continue;
 
-        if (region_start < kernel_phys_end && region_end > kernel_phys_base) {
-            if (region_start + needed <= kernel_phys_base) {
+        if (region_start < kernel_phys_end && region_end > kernel_phys_base)
+        {
+            if (region_start + needed <= kernel_phys_base)
+            {
                 pmm_stack_phys = region_start;
                 break;
             }
             uint64_t after_kernel = (kernel_phys_end + 0xFFF) & ~0xFFF;
-            if (after_kernel + needed <= region_end) {
+            if (after_kernel + needed <= region_end)
+            {
                 pmm_stack_phys = after_kernel;
                 break;
             }
-        } else {
-            if (region_start + needed <= region_end) {
+        }
+        else
+        {
+            if (region_start + needed <= region_end)
+            {
                 pmm_stack_phys = region_start;
                 break;
             }
         }
     }
 
-    uintptr_t *pmm_stack_virt = (uintptr_t *)(pmm_stack_phys + hhdm_offset);
+    uintptr_t* pmm_stack_virt = (uintptr_t*)(pmm_stack_phys + hhdm_offset);
 
-    if (pmm_stack_phys == 0) {
+    if (pmm_stack_phys == 0)
+    {
         kshell.print_kernel_error("Could not find space for PMM stack");
         hcf();
     }
@@ -195,7 +227,8 @@ extern "C" void kmain() {
     Buddy buddy(&pmm, hhdm_offset);
 
     uint64_t pages_imported = 0;
-    while (uintptr_t page = pmm.alloc()) {
+    while (uintptr_t page = pmm.alloc())
+    {
         buddy.free(page, 0);
         pages_imported++;
     }
@@ -204,7 +237,8 @@ extern "C" void kmain() {
         pages_imported, buddy.total_free());
 
     uint64_t max_pfn = 0;
-    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++) {
+    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++)
+    {
         auto entry = memmap_request.response->entries[i];
         if (entry->type != LIMINE_MEMMAP_USABLE)
             continue;
@@ -213,13 +247,14 @@ extern "C" void kmain() {
         if (end_pfn > max_pfn)
             max_pfn = end_pfn;
     }
-    if (!page_meta_init(&buddy, hhdm_offset, max_pfn)) {
+    if (!page_meta_init(&buddy, hhdm_offset, max_pfn))
+    {
         kshell.print_kernel_error("page_meta_init failed");
         hcf();
     }
     kshell.print_kernel_success("Initialized page metadata");
 
-    kmalloc_init((void *)&buddy, hhdm_offset);
+    kmalloc_init((void*)&buddy, hhdm_offset);
     kshell.print_kernel_success("Initialized kmalloc/SLAB allocator");
 
     VMM vmm(&buddy, hhdm_offset);
@@ -288,21 +323,23 @@ extern "C" void kmain() {
     // that is fine because main_task is RUNNING (not READY) at that point,
     // so the scheduler will never try to restore from rsp=0.
     serial_print("scheduler init...\n");
-    task *main_task = (task *)kmalloc(sizeof(task));
+    task* main_task = (task*)kmalloc(sizeof(task));
     main_task->rsp = 0; // filled on first preemption
     main_task->stack_base = (uint64_t)kernel_stack; // informational only
     main_task->state = TASK_RUNNING;                // already executing
     scheduler.add_task(main_task);
     kshell.print_kernel_success("Registered kmain task");
 
-    task *ta = scheduler.create_kthread(thread_a);
-    if (ta) {
+    task* ta = scheduler.create_kthread(thread_a);
+    if (ta)
+    {
         scheduler.add_task(ta);
         kshell.print_kernel_success("Created kernel thread A");
     }
 
-    task *tb = scheduler.create_kthread(thread_b);
-    if (tb) {
+    task* tb = scheduler.create_kthread(thread_b);
+    if (tb)
+    {
         scheduler.add_task(tb);
         kshell.print_kernel_success("Created kernel thread B");
     }

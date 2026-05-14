@@ -20,19 +20,22 @@ struct acpi_hpet {
 } __attribute__((packed));
 
 class HPET {
-  private:
+private:
     uintptr_t mmio_base;
     uint64_t
         period_fs; // femtoseconds per tick (e.g., 10000000 = 10 ns = 100 MHz)
     uint64_t counter_mask;
 
-  public:
-    HPET(uintptr_t rsdp_addr, VMM *vmm, uint64_t hddm);
+public:
+    HPET(uintptr_t rsdp_addr, VMM* vmm, uint64_t hddm);
     ~HPET();
 
     void enable();
     uint64_t read_counter();
     void busy_wait_ns(uint64_t ns);
     uint64_t counter_to_ns(uint64_t ticks);
-    uint64_t get_period_fs() { return period_fs; }
+    uint64_t get_period_fs()
+    {
+        return period_fs;
+    }
 };

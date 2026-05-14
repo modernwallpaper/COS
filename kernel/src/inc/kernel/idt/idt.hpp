@@ -12,9 +12,9 @@
 // Standard 64-bit IDT entry
 struct IDT_entry_struct {
     uint16_t offset_low;
-    uint16_t selector;        // GDT code segment selector
-    uint8_t ist;              // Interrupt Stack Table offset (0 = no IST switch)
-    uint8_t type_attributes;  // Gate type, DPL, present
+    uint16_t selector;       // GDT code segment selector
+    uint8_t ist;             // Interrupt Stack Table offset (0 = no IST switch)
+    uint8_t type_attributes; // Gate type, DPL, present
     uint16_t offset_mid;
     uint32_t offset_high;
     uint32_t zero;
@@ -44,18 +44,18 @@ struct interrupt_frame {
 };
 
 class IDT {
-  private:
+private:
     IDT_entry_struct idt[256];
     IDTR idtr;
 
-  public:
-    KShell *kshell;
-    IDT(KShell *kshell);
+public:
+    KShell* kshell;
+    IDT(KShell* kshell);
     void load_idt();
-    void set_idt_gate(int n, void *handler);
-    void print_interrupt_message(const char *msg, ...);
+    void set_idt_gate(int n, void* handler);
+    void print_interrupt_message(const char* msg, ...);
 };
 
-extern "C" void isr_handler(interrupt_frame *frame);
-extern "C" void irq_handler(interrupt_frame *frame);
+extern "C" void isr_handler(interrupt_frame* frame);
+extern "C" void irq_handler(interrupt_frame* frame);
 extern IDT* global_idt;

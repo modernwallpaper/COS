@@ -17,13 +17,13 @@ struct task {
 struct interrupt_frame;
 
 class Scheduler {
-  public:
+public:
     Scheduler();
     int add_task(task* t);
     task* create_kthread(void (*entry)());
     uint64_t switch_if_needed(interrupt_frame* frame);
 
-  private:
+private:
     static constexpr int MAX_TASKS = 32;
     static constexpr int THREAD_STACK_SIZE = 16384;
 

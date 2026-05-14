@@ -10,14 +10,13 @@
 //
 // Format specifiers: %s %d %u %x %llu %b %c %p %%
 // NOTE: %x/%d read 32-bit va_args — be careful when passing uint64_t.
-class KShell 
-{
+class KShell {
 private:
     Graphics* graphics;
 
     uint64_t cursor_pos_x;
     uint64_t cursor_pos_y;
-    
+
     typedef struct {
         uint64_t max_width;
         uint64_t max_height;
@@ -38,6 +37,7 @@ private:
 
     uint32_t default_foreground_color;
     uint32_t default_background_color;
+
 public:
     KShell(Graphics* graphics);
     ~KShell();
@@ -48,10 +48,10 @@ public:
 
     void print_kernel_info(const char* fmt, ...);
     void vprint_kernel_info(const char* fmt, va_list args);
-    
+
     void print_kernel_success(const char* fmt, ...);
     void vprint_kernel_success(const char* fmt, va_list args);
-    
+
     void print_kernel_warning(const char* fmt, ...);
     void vprint_kernel_warning(const char* fmt, va_list args);
 

@@ -8,16 +8,19 @@ static constexpr int THREAD_STACK_SIZE = 16384;
 
 Scheduler scheduler;
 
-extern "C" uint64_t scheduler_switch_if_needed(interrupt_frame *frame) {
+extern "C" uint64_t scheduler_switch_if_needed(interrupt_frame* frame)
+{
     return scheduler.switch_if_needed(frame);
 }
 
-Scheduler::Scheduler() {
+Scheduler::Scheduler()
+{
     task_count = 0;
     current_task = nullptr;
 }
 
-int Scheduler::add_task(task *t) {
+int Scheduler::add_task(task* t)
+{
     if (task_count >= MAX_TASKS)
         return -1;
     tasks[task_count++] = t;
@@ -26,15 +29,19 @@ int Scheduler::add_task(task *t) {
     return task_count - 1;
 }
 
-uint64_t Scheduler::switch_if_needed(interrupt_frame *frame) {
-    if (current_task == nullptr || task_count == 0) {
+uint64_t Scheduler::switch_if_needed(interrupt_frame* frame)
+{
+    if (current_task == nullptr || task_count == 0)
+    {
         serial_print("[SCHED] no tasks\n");
         return (uint64_t)frame;
     }
 
     int current_idx = -1;
-    for (int i = 0; i < task_count; i++) {
-        if (tasks[i] == current_task) {
+    for (int i = 0; i < task_count; i++)
+    {
+        if (tasks[i] == current_task)
+        {
             current_idx = i;
             break;
         }
@@ -45,16 +52,19 @@ uint64_t Scheduler::switch_if_needed(interrupt_frame *frame) {
     current_task->rsp = (uint64_t)frame;
     current_task->state = TASK_READY;
 
-    task *next = nullptr;
-    for (int i = 1; i <= task_count; i++) {
+    task* next = nullptr;
+    for (int i = 1; i <= task_count; i++)
+    {
         int idx = (current_idx + i) % task_count;
-        if (tasks[idx]->state == TASK_READY) {
+        if (tasks[idx]->state == TASK_READY)
+        {
             next = tasks[idx];
             break;
         }
     }
 
-    if (next) {
+    if (next)
+    {
         serial_print("[SCHED] switch curr=");
         serial_print_hex((uint64_t)current_task);
         serial_print(" next=");
@@ -63,8 +73,9 @@ uint64_t Scheduler::switch_if_needed(interrupt_frame *frame) {
         serial_print_hex(next->rsp);
         serial_print(" base=");
         serial_print_hex(next->stack_base);
-        if (next->rsp) {
-            interrupt_frame *f = (interrupt_frame *)next->rsp;
+        if (next->rsp)
+        {
+            interrupt_frame* f = (interrupt_frame*)next->rsp;
             serial_print(" rip=");
             serial_print_hex(f->rip);
             serial_print(" cs=");
@@ -88,14 +99,15 @@ static uint8_t kthread_stacks[4][THREAD_STACK_SIZE]
     __attribute__((aligned(4096)));
 static int kthread_stack_idx = 0;
 
-task *Scheduler::create_kthread(void (*entry)()) {
-    task *t = (task *)kmalloc(sizeof(task));
+task* Scheduler::create_kthread(void (*entry)())
+{
+    task* t = (task*)kmalloc(sizeof(task));
     if (!t)
         return nullptr;
 
     if (kthread_stack_idx >= 4)
         return nullptr;
-    uint8_t *stack = kthread_stacks[kthread_stack_idx++];
+    uint8_t* stack = kthread_stacks[kthread_stack_idx++];
 
     t->stack_base = (uint64_t)stack;
     t->state = TASK_READY;
@@ -139,22 +151,22 @@ task *Scheduler::create_kthread(void (*entry)()) {
     // (value 0, 16‑byte aligned), SS = 0 and final RSP = frame+136
     // (≡ 8 mod 16, correct for -fomit-frame-pointer).
 
-    uint64_t *top = (uint64_t *)(stack + THREAD_STACK_SIZE);
+    uint64_t* top = (uint64_t*)(stack + THREAD_STACK_SIZE);
 
     // Address of the error field inside the frame — this becomes saved_RSP.
     // After all 22 pushes: top = stack+16384 - 22*8 = stack+16384-176.
     // Error field is at top+128 = stack+16384-48.
     uint64_t error_addr = (uint64_t)(stack + THREAD_STACK_SIZE - 48);
 
-    *--top = 0;                 // ss: null selector (offset +168)
-    *--top = error_addr;        // rsp: points at error field (offset +160)
-    *--top = 0x202;             // rflags: IF=1, reserved bit 1 (offset +152)
-    *--top = 0x08;              // cs: kernel code segment (offset +144)
-    *--top = (uint64_t)entry;   // rip: thread entry point (offset +136)
+    *--top = 0;               // ss: null selector (offset +168)
+    *--top = error_addr;      // rsp: points at error field (offset +160)
+    *--top = 0x202;           // rflags: IF=1, reserved bit 1 (offset +152)
+    *--top = 0x08;            // cs: kernel code segment (offset +144)
+    *--top = (uint64_t)entry; // rip: thread entry point (offset +136)
 
     // Error code + vector (consumed by add rsp,16 in .restore)
-    *--top = 0;                 // error code (offset +128)
-    *--top = 0;                 // vector number (offset +120)
+    *--top = 0; // error code (offset +128)
+    *--top = 0; // vector number (offset +120)
 
     // 15 saved general-purpose registers (all zero)
     *--top = 0; // rax (offset +112)

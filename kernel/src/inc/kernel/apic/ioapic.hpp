@@ -83,15 +83,15 @@ class KShell;
 class Buddy;
 
 class IOAPIC {
-  public:
+public:
     bool initialized;
-    IOAPIC(KShell *kshell, Buddy *buddy, uint64_t hhdm_offset,
+    IOAPIC(KShell* kshell, Buddy* buddy, uint64_t hhdm_offset,
            uint64_t lapic_id, uintptr_t rsdp_addr);
     ~IOAPIC();
 
-  private:
-    KShell *kshell;
-    Buddy *buddy;
+private:
+    KShell* kshell;
+    Buddy* buddy;
     uint64_t hhdm_offset;
     uintptr_t ioapic_phys;
     uint64_t gsi_base;

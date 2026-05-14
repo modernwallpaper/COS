@@ -23,9 +23,9 @@
 class HPET;
 
 class Apic {
-  private:
+private:
     uintptr_t apic_base;
-    KShell *kshell;
+    KShell* kshell;
 
     bool check_apic();
     uintptr_t cpu_get_apic_base();
@@ -34,9 +34,9 @@ class Apic {
     uint32_t lapic_read(uint16_t reg);
     void lapic_write(uint16_t reg, uint32_t value);
 
-  public:
+public:
     uint32_t calibrated_10ms;
-    Apic(KShell *kshell);
+    Apic(KShell* kshell);
     ~Apic();
 
     uintptr_t get_apic_base();
@@ -44,5 +44,8 @@ class Apic {
     void enable();
     void timer_init(uint8_t vector, uint32_t initial_count);
     void calibrate(HPET* hpet);
-    uint32_t ticks_per_ms() { return calibrated_10ms / 10; }
+    uint32_t ticks_per_ms()
+    {
+        return calibrated_10ms / 10;
+    }
 };

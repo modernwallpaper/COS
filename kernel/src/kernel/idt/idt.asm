@@ -11,6 +11,8 @@ global apic_timer_stub
 extern isr_handler
 extern scheduler_switch_if_needed
 
+section .text
+
 ; ------------------------
 ; CPU EXCEPTIONS
 ; ------------------------
