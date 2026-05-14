@@ -23,5 +23,6 @@ struct kmem_cache {
 };
 
 void slab_init(Buddy* buddy, uint64_t hhdm_offset);
+size_t slab_max_object_size();
 void* slab_alloc(size_t size);
 void slab_free(void* ptr);

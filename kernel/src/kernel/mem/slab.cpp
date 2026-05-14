@@ -24,6 +24,11 @@ void slab_init(Buddy* buddy, uint64_t hhdm_offset)
         caches[i].slabs = nullptr;
 }
 
+size_t slab_max_object_size()
+{
+    return caches[CACHE_COUNT - 1].object_size;
+}
+
 static int slab_refill(kmem_cache* cache)
 {
     uintptr_t phys = slab_buddy->alloc(0);

@@ -3,6 +3,7 @@
 #include <inc/kernel/idt/idt.hpp>
 #include <inc/kernel/kshell/kshell.hpp>
 #include <inc/kernel/ports/ports.hpp>
+#include <inc/kernel/sched/task.hpp>
 
 IDT* global_idt;
 
@@ -129,8 +130,7 @@ extern "C" void isr_handler(interrupt_frame* frame)
     }
     else if (frame->vector == 48)
     {
-        // APIC timer fired — acknowledge by reading the LAPIC EOI register
-        serial_print("[TIMER]\n");
+        scheduler_on_tick();
         *(volatile uint32_t*)0xFEE000B0 = 0;
     }
     else

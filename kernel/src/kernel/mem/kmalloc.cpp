@@ -36,7 +36,7 @@ void* kmalloc(size_t size)
     if (size == 0 || kmalloc_buddy == nullptr)
         return nullptr;
 
-    if (size <= 2048)
+    if (size <= slab_max_object_size())
         return slab_alloc(size);
 
     int order = size_to_order(size);

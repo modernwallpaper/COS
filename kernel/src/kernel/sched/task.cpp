@@ -1,10 +1,7 @@
-#include <cstdint>
 #include <inc/kernel/idt/idt.hpp>
 #include <inc/kernel/mem/kmalloc.hpp>
 #include <inc/kernel/ports/ports.hpp>
 #include <inc/kernel/sched/task.hpp>
-
-static constexpr int THREAD_STACK_SIZE = 16384;
 
 Scheduler scheduler;
 
@@ -13,20 +10,82 @@ extern "C" uint64_t scheduler_switch_if_needed(interrupt_frame* frame)
     return scheduler.switch_if_needed(frame);
 }
 
+extern "C" void scheduler_on_tick()
+{
+    scheduler.on_tick();
+}
+
+void sleep_ms(uint64_t ms)
+{
+    scheduler.sleep_ms(ms);
+}
+
 Scheduler::Scheduler()
 {
     task_count = 0;
     current_task = nullptr;
+    next_task_id = 1;
+    tick_count = 0;
+    switch_count = 0;
 }
 
 int Scheduler::add_task(task* t)
 {
     if (task_count >= MAX_TASKS)
         return -1;
+    t->id = next_task_id++;
     tasks[task_count++] = t;
     if (current_task == nullptr)
         current_task = t;
     return task_count - 1;
+}
+
+void Scheduler::on_tick()
+{
+    tick_count++;
+
+    for (int i = 0; i < task_count; i++)
+    {
+        task* t = tasks[i];
+        if (t->state == TASK_SLEEPING && t->wake_tick <= tick_count)
+            t->state = TASK_READY;
+    }
+
+    if ((tick_count % 100) == 0 && current_task != nullptr)
+    {
+        serial_print("[SCHED] ticks=");
+        serial_print_hex(tick_count);
+        serial_print(" switches=");
+        serial_print_hex(switch_count);
+        serial_print(" current=");
+        serial_print(current_task->name ? current_task->name : "<unnamed>");
+        serial_print("\n");
+    }
+}
+
+task* Scheduler::pick_next(int current_idx)
+{
+    task* idle_task = nullptr;
+
+    for (int i = 1; i <= task_count; i++)
+    {
+        int idx = (current_idx + i) % task_count;
+        task* candidate = tasks[idx];
+
+        if (candidate->state != TASK_READY)
+            continue;
+
+        if (candidate->idle)
+        {
+            if (idle_task == nullptr)
+                idle_task = candidate;
+            continue;
+        }
+
+        return candidate;
+    }
+
+    return idle_task;
 }
 
 uint64_t Scheduler::switch_if_needed(interrupt_frame* frame)
@@ -50,67 +109,60 @@ uint64_t Scheduler::switch_if_needed(interrupt_frame* frame)
         return (uint64_t)frame;
 
     current_task->rsp = (uint64_t)frame;
-    current_task->state = TASK_READY;
+    if (current_task->state == TASK_RUNNING)
+        current_task->state = TASK_READY;
 
-    task* next = nullptr;
-    for (int i = 1; i <= task_count; i++)
-    {
-        int idx = (current_idx + i) % task_count;
-        if (tasks[idx]->state == TASK_READY)
-        {
-            next = tasks[idx];
-            break;
-        }
-    }
+    task* next = pick_next(current_idx);
 
     if (next)
     {
-        serial_print("[SCHED] switch curr=");
-        serial_print_hex((uint64_t)current_task);
-        serial_print(" next=");
-        serial_print_hex((uint64_t)next);
-        serial_print(" rsp=");
-        serial_print_hex(next->rsp);
-        serial_print(" base=");
-        serial_print_hex(next->stack_base);
-        if (next->rsp)
-        {
-            interrupt_frame* f = (interrupt_frame*)next->rsp;
-            serial_print(" rip=");
-            serial_print_hex(f->rip);
-            serial_print(" cs=");
-            serial_print_hex(f->cs);
-            serial_print(" rfl=");
-            serial_print_hex(f->rflags);
-        }
-        serial_print("\n");
-
         next->state = TASK_RUNNING;
+        if (next != current_task)
+            switch_count++;
         current_task = next;
         return next->rsp;
     }
 
-    serial_print("[SCHED] no switch\n");
     current_task->state = TASK_RUNNING;
     return (uint64_t)frame;
 }
 
-static uint8_t kthread_stacks[4][THREAD_STACK_SIZE]
-    __attribute__((aligned(4096)));
-static int kthread_stack_idx = 0;
+void Scheduler::sleep_ms(uint64_t ms)
+{
+    if (current_task == nullptr || current_task->idle)
+        return;
 
-task* Scheduler::create_kthread(void (*entry)())
+    uint64_t ticks_to_sleep = (ms + TICK_MS - 1) / TICK_MS;
+    if (ticks_to_sleep == 0)
+        ticks_to_sleep = 1;
+
+    asm volatile("cli" ::: "memory");
+    current_task->wake_tick = tick_count + ticks_to_sleep;
+    current_task->state = TASK_SLEEPING;
+    asm volatile("sti" ::: "memory");
+
+    while (current_task->state == TASK_SLEEPING)
+        asm volatile("hlt" ::: "memory");
+}
+
+task* Scheduler::create_kthread(void (*entry)(), const char* name, bool idle)
 {
     task* t = (task*)kmalloc(sizeof(task));
     if (!t)
         return nullptr;
 
-    if (kthread_stack_idx >= 4)
+    uint8_t* stack = (uint8_t*)kmalloc(THREAD_STACK_SIZE);
+    if (!stack)
+    {
+        kfree(t);
         return nullptr;
-    uint8_t* stack = kthread_stacks[kthread_stack_idx++];
+    }
 
     t->stack_base = (uint64_t)stack;
+    t->wake_tick = 0;
+    t->name = name;
     t->state = TASK_READY;
+    t->idle = idle;
 
     // Build a fake interrupt_frame at the top of the stack that isr_common
     // will restore when this task is first scheduled.
@@ -154,8 +206,8 @@ task* Scheduler::create_kthread(void (*entry)())
     uint64_t* top = (uint64_t*)(stack + THREAD_STACK_SIZE);
 
     // Address of the error field inside the frame — this becomes saved_RSP.
-    // After all 22 pushes: top = stack+16384 - 22*8 = stack+16384-176.
-    // Error field is at top+128 = stack+16384-48.
+    // After all 22 pushes: top = stack + THREAD_STACK_SIZE - 22*8.
+    // Error field is at top+128 = stack + THREAD_STACK_SIZE - 48.
     uint64_t error_addr = (uint64_t)(stack + THREAD_STACK_SIZE - 48);
 
     *--top = 0;               // ss: null selector (offset +168)

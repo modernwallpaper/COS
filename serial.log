@@ -1,0 +1,56 @@
+[2J[001;001H[=3h[2J[001;001H[2J[001;001H[8;042;160t[2J[001;001H[2J[001;001H[8;056;240t[2J[001;001HBdsDxe: loading Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+[2J[001;001H[001;001H[2J[001;001H[001;001Hbooting...
+[TEST] boot self-tests start
+[TEST] PASS kmalloc/kfree slab allocations
+[TEST] PASS buddy multi-page allocation
+[TEST] PASS mixed allocation/free order
+[TEST] PASS scheduler task add limit
+[TEST] PASS boot self-tests
+rsdp_addr=FFFF80007F77E014
+ioapic done
+hpet init...
+hpet init ok
+hpet enable...
+hpet enable ok
+calibrate...
+calibrate ok
+scheduler init...
+scheduler init ok
+timer arm...
+[SCHED] thread_a entered
+[SCHED] A
+[SCHED] thread_b entered
+[SCHED] B
+[TEST] PASS sleep_ms waits at least requested ticks
+timer arm ok
+kmain entering sleep loop
+[SCHED] A
+[SCHED] ticks=0000000000000064 switches=0000000000000009 current=idle
+[SCHED] A
+[SCHED] B
+[SCHED] A
+[SCHED] ticks=00000000000000C8 switches=0000000000000012 current=idle
+[SCHED] A
+[SCHED] B
+[SCHED] A
+[SCHED] ticks=000000000000012C switches=000000000000001B current=idle
+[SCHED] A
+[SCHED] B
+[SCHED] A
+[SCHED] ticks=0000000000000190 switches=0000000000000024 current=idle
+[SCHED] A
+[SCHED] B
+[SCHED] A
+[SCHED] ticks=00000000000001F4 switches=000000000000002D current=idle
+[SCHED] A
+[SCHED] B
+[SCHED] A
+[SCHED] ticks=0000000000000258 switches=0000000000000036 current=idle
+[SCHED] A
+[SCHED] B
+[SCHED] A
+[SCHED] ticks=00000000000002BC switches=000000000000003F current=idle
+[SCHED] A
+[SCHED] B
+[SCHED] A

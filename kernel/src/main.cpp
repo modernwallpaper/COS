@@ -16,6 +16,7 @@
 #include <inc/kernel/mem/page_meta.hpp>
 #include <inc/kernel/ports/ports.hpp>
 #include <inc/kernel/sched/task.hpp>
+#include <inc/kernel/tests/selftests.hpp>
 
 namespace
 {
@@ -71,6 +72,8 @@ __attribute__((used, section(".limine_requests_end"))) volatile std::uint64_t
 namespace
 {
 
+constexpr uint64_t PAGE_SIZE = 0x1000;
+
 void hcf()
 {
     for (;;)
@@ -83,6 +86,70 @@ void hcf()
         asm("idle 0");
 #endif
     }
+}
+
+uint64_t align_up_page(uint64_t value)
+{
+    return (value + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+}
+
+uint64_t align_down_page(uint64_t value)
+{
+    return value & ~(PAGE_SIZE - 1);
+}
+
+uint64_t count_usable_pages(limine_memmap_response* memmap)
+{
+    uint64_t pages = 0;
+
+    for (uint64_t i = 0; i < memmap->entry_count; i++)
+    {
+        auto entry = memmap->entries[i];
+        if (entry->type != LIMINE_MEMMAP_USABLE)
+            continue;
+
+        uint64_t start = align_up_page(entry->base);
+        uint64_t end = align_down_page(entry->base + entry->length);
+        if (start < end)
+            pages += (end - start) / PAGE_SIZE;
+    }
+
+    return pages;
+}
+
+uint64_t find_pmm_stack_region(limine_memmap_response* memmap,
+                               uint64_t needed_bytes, uint64_t kernel_phys_base,
+                               uint64_t kernel_phys_end)
+{
+    for (uint64_t i = 0; i < memmap->entry_count; i++)
+    {
+        auto entry = memmap->entries[i];
+        if (entry->type != LIMINE_MEMMAP_USABLE)
+            continue;
+
+        uint64_t region_start = align_up_page(entry->base);
+        uint64_t region_end = align_down_page(entry->base + entry->length);
+        if (region_start >= region_end)
+            continue;
+
+        if (region_start < kernel_phys_end && region_end > kernel_phys_base)
+        {
+            if (region_start < kernel_phys_base &&
+                needed_bytes <= kernel_phys_base - region_start)
+                return region_start;
+
+            uint64_t after_kernel = align_up_page(kernel_phys_end);
+            if (after_kernel < region_end &&
+                needed_bytes <= region_end - after_kernel)
+                return after_kernel;
+        }
+        else if (needed_bytes <= region_end - region_start)
+        {
+            return region_start;
+        }
+    }
+
+    return 0;
 }
 
 } // namespace
@@ -110,6 +177,8 @@ static void thread_a()
     serial_print("[SCHED] thread_a entered\n");
     while (true)
     {
+        serial_print("[SCHED] A\n");
+        sleep_ms(500);
     }
 }
 
@@ -118,7 +187,15 @@ static void thread_b()
     serial_print("[SCHED] thread_b entered\n");
     while (true)
     {
+        serial_print("[SCHED] B\n");
+        sleep_ms(1000);
     }
+}
+
+static void idle_thread()
+{
+    while (true)
+        asm volatile("hlt");
 }
 
 extern "C" void kmain()
@@ -174,43 +251,10 @@ extern "C" void kmain()
     uint64_t kernel_size = (uint64_t)_end - kernel_virtual_base;
     uint64_t kernel_phys_end = kernel_phys_base + kernel_size;
 
-    uint64_t pmm_stack_phys = 0;
-    uint64_t pmm_stack_size = 1048576;
+    uint64_t pmm_stack_size = count_usable_pages(memmap_request.response);
     uint64_t needed = pmm_stack_size * sizeof(uintptr_t);
-    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++)
-    {
-        auto entry = memmap_request.response->entries[i];
-        if (entry->type != LIMINE_MEMMAP_USABLE)
-            continue;
-
-        uint64_t region_start = (entry->base + 0xFFF) & ~0xFFF;
-        uint64_t region_end = (entry->base + entry->length) & ~0xFFF;
-        if (region_start >= region_end)
-            continue;
-
-        if (region_start < kernel_phys_end && region_end > kernel_phys_base)
-        {
-            if (region_start + needed <= kernel_phys_base)
-            {
-                pmm_stack_phys = region_start;
-                break;
-            }
-            uint64_t after_kernel = (kernel_phys_end + 0xFFF) & ~0xFFF;
-            if (after_kernel + needed <= region_end)
-            {
-                pmm_stack_phys = after_kernel;
-                break;
-            }
-        }
-        else
-        {
-            if (region_start + needed <= region_end)
-            {
-                pmm_stack_phys = region_start;
-                break;
-            }
-        }
-    }
+    uint64_t pmm_stack_phys = find_pmm_stack_region(
+        memmap_request.response, needed, kernel_phys_base, kernel_phys_end);
 
     uintptr_t* pmm_stack_virt = (uintptr_t*)(pmm_stack_phys + hhdm_offset);
 
@@ -257,6 +301,13 @@ extern "C" void kmain()
     kmalloc_init((void*)&buddy, hhdm_offset);
     kshell.print_kernel_success("Initialized kmalloc/SLAB allocator");
 
+    if (!run_boot_self_tests(&buddy))
+    {
+        kshell.print_kernel_error("Boot self-tests failed");
+        hcf();
+    }
+    kshell.print_kernel_success("Boot self-tests passed");
+
     VMM vmm(&buddy, hhdm_offset);
     kshell.print_kernel_success("Initialized VMM");
 
@@ -276,16 +327,13 @@ extern "C" void kmain()
     kshell.print_kernel_success("Initialized PIC");
 
     pic_disable();
-    kshell.print_kernel_success("Disabled PIC");
+    kshell.print_kernel_success("Disabled PIC ... Wow, how long that lasted");
 
     Apic apic(&kshell);
     kshell.print_kernel_success("Initialized APIC");
 
     apic.enable();
     kshell.print_kernel_success("APIC enabled via SVR");
-
-    apic.timer_init(48, 0x100000);
-    kshell.print_kernel_success("APIC timer started");
 
     uint8_t lapic_id = apic.get_id();
     uintptr_t rsdp_addr =
@@ -326,35 +374,57 @@ extern "C" void kmain()
     task* main_task = (task*)kmalloc(sizeof(task));
     main_task->rsp = 0; // filled on first preemption
     main_task->stack_base = (uint64_t)kernel_stack; // informational only
-    main_task->state = TASK_RUNNING;                // already executing
+    main_task->wake_tick = 0;
+    main_task->name = "kmain";
+    main_task->state = TASK_RUNNING; // already executing
+    main_task->idle = false;
     scheduler.add_task(main_task);
     kshell.print_kernel_success("Registered kmain task");
 
-    task* ta = scheduler.create_kthread(thread_a);
+    task* idle = scheduler.create_kthread(idle_thread, "idle", true);
+    if (idle)
+    {
+        scheduler.add_task(idle);
+        kshell.print_kernel_success("Created idle task");
+    }
+
+    task* ta = scheduler.create_kthread(thread_a, "thread_a");
     if (ta)
     {
         scheduler.add_task(ta);
         kshell.print_kernel_success("Created kernel thread A");
     }
 
-    task* tb = scheduler.create_kthread(thread_b);
+    task* tb = scheduler.create_kthread(thread_b, "thread_b");
     if (tb)
     {
         scheduler.add_task(tb);
         kshell.print_kernel_success("Created kernel thread B");
     }
+
+    task* sleep_test =
+        scheduler.create_kthread(sleep_test_thread, "sleep_test");
+    if (sleep_test)
+    {
+        scheduler.add_task(sleep_test);
+        kshell.print_kernel_success("Created sleep self-test thread");
+    }
     serial_print("scheduler init ok\n");
 
-    // Re-arm APIC timer with calibrated value for 10 ms period (100 Hz).
-    // Do this AFTER all tasks are registered so the first tick sees a full
-    // run-queue and doesn't try to switch to an incomplete task list.
+    // Arm the APIC timer only after all tasks are registered, so the first
+    // scheduler tick sees a valid run queue.
     serial_print("timer arm...\n");
     apic.timer_init(48, apic.calibrated_10ms);
-    kshell.print_kernel_success("APIC timer re-armed at 100 Hz");
+    kshell.print_kernel_success("APIC timer armed at 100 Hz");
     serial_print("timer arm ok\n");
 
     kshell.print_kernel_info("Scheduler running at 100 Hz");
-    serial_print("entering hcf\n");
 
-    hcf();
+    kshell.print_kernel_info(
+        "Holy shit, we actually got here without tripple-faulting");
+
+    serial_print("kmain entering sleep loop\n");
+
+    while (true)
+        sleep_ms(1000);
 }
