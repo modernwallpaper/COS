@@ -1,14 +1,8 @@
 #include <cstdint>
 #include <inc/kernel/mem/kmalloc.hpp>
+#include <inc/kernel/mem/page_meta.hpp>
 #include <inc/kernel/mem/slab.hpp>
 #include <inc/kernel/mem/buddy.hpp>
-
-#define KMALLOC_MAGIC 0x4B4D4C4F43000000ULL
-
-struct kmalloc_hdr {
-    uint64_t magic;
-    int order;
-};
 
 static Buddy* kmalloc_buddy;
 static uint64_t kmalloc_hhdm;
@@ -33,20 +27,26 @@ void* kmalloc(size_t size) {
     if (size == 0 || kmalloc_buddy == nullptr)
         return nullptr;
 
-    if (size <= 2048)
-        return slab_alloc(size);
+    if (size <= 2048) {
+        void* p = slab_alloc(size);
+        if (p)
+            page_meta_set_type((uintptr_t)p >> 12, PAGE_SLAB);
+        return p;
+    }
 
-    size_t total = size + sizeof(kmalloc_hdr);
-    int order = size_to_order(total);
+    int order = size_to_order(size);
     uintptr_t phys = kmalloc_buddy->alloc(order);
     if (phys == 0)
         return nullptr;
 
-    kmalloc_hdr* hdr = (kmalloc_hdr*)(phys + kmalloc_hhdm);
-    hdr->magic = KMALLOC_MAGIC;
-    hdr->order = order;
+    uint64_t page_count = 1ULL << order;
+    for (uint64_t i = 0; i < page_count; i++) {
+        uint64_t pfn = (phys >> 12) + i;
+        page_meta_set_type(pfn, PAGE_BUDDY_DIRECT);
+        page_meta_set_order(pfn, order);
+    }
 
-    return (void*)((uintptr_t)hdr + sizeof(kmalloc_hdr));
+    return (void*)(phys + kmalloc_hhdm);
 }
 
 void* kcalloc(size_t num, size_t size) {
@@ -85,17 +85,19 @@ void kfree(void* ptr) {
     if (ptr == nullptr || kmalloc_buddy == nullptr)
         return;
 
-    uintptr_t page = (uintptr_t)ptr & ~0xFFFULL;
+    uint64_t pfn = (uintptr_t)ptr >> 12;
+    PageType type = page_meta_get_type(pfn);
 
-    slab_header* slab = (slab_header*)page;
-    if (slab->magic == SLAB_MAGIC) {
+    if (type == PAGE_SLAB) {
         slab_free(ptr);
-        return;
-    }
+    } else if (type == PAGE_BUDDY_DIRECT) {
+        uint8_t order = page_meta_get_order(pfn);
+        uint64_t base_pfn = pfn & ~((1ULL << order) - 1);
+        uintptr_t base_phys = base_pfn << 12;
+        kmalloc_buddy->free(base_phys, order);
 
-    kmalloc_hdr* hdr = (kmalloc_hdr*)((uintptr_t)ptr - sizeof(kmalloc_hdr));
-    if (hdr->magic == KMALLOC_MAGIC) {
-        uintptr_t hdr_phys = (uintptr_t)hdr - kmalloc_hhdm;
-        kmalloc_buddy->free(hdr_phys, hdr->order);
+        uint64_t count = 1ULL << order;
+        for (uint64_t i = 0; i < count; i++)
+            page_meta_set_type(base_pfn + i, PAGE_FREE);
     }
 }

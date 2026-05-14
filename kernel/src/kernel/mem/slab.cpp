@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <inc/kernel/mem/page_meta.hpp>
 #include <inc/kernel/mem/slab.hpp>
 #include <inc/kernel/mem/buddy.hpp>
 
@@ -112,6 +113,7 @@ void slab_free(void* ptr) {
             }
             prev = &(*prev)->next;
         }
+        page_meta_set_type((page - slab_hhdm) >> 12, PAGE_FREE);
         slab_buddy->free(page - slab_hhdm, 0);
     }
 }

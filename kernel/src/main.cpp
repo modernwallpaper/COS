@@ -10,6 +10,7 @@
 
 #include <inc/kernel/gdt/gdt.hpp>
 #include <inc/kernel/graphics/graphics.hpp>
+#include <inc/kernel/mem/page_meta.hpp>
 #include <inc/kernel/idt/idt.hpp>
 #include <inc/kernel/kshell/kshell.hpp>
 #include <inc/kernel/ports/ports.hpp>
@@ -124,7 +125,7 @@ extern "C" void kmain() {
 
     serial_init();
 #ifdef DEBUGGING
-    serial_print("COS booting...\n");
+    serial_print("booting...\n");
 #endif
 
     // Ensure we got a framebuffer.
@@ -238,6 +239,18 @@ extern "C" void kmain() {
     kshell.print_kernel_success("Initialized Buddy allocator (%d pages free)",
                                 buddy.total_free());
 
+    // Compute max PFN from memory map and initialize page metadata
+    uint64_t max_pfn = 0;
+    for (uint64_t i = 0; i < memmap_request.response->entry_count; i++) {
+        uint64_t end = memmap_request.response->entries[i]->base +
+                       memmap_request.response->entries[i]->length;
+        uint64_t end_pfn = (end + 0xFFF) >> 12;
+        if (end_pfn > max_pfn)
+            max_pfn = end_pfn;
+    }
+    page_meta_init(&buddy, hhdm_offset, max_pfn);
+    kshell.print_kernel_success("Initialized page metadata");
+
     // Initialize kmalloc/SLAB allocator
     kmalloc_init((void *)&buddy, hhdm_offset);
     kshell.print_kernel_success("Initialized kmalloc/SLAB allocator");
@@ -307,8 +320,9 @@ extern "C" void kmain() {
         kshell.print_kernel_error("I/O APIC initialization failed");
 
 #ifdef DEBUGGING
-    serial_print("ioapic done, halting\n");
+    serial_print("ioapic done\n");
 #endif
+
     // We're done, just hang...
     hcf();
 }
