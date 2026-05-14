@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <inc/kernel/apic/apic.hpp>
+#include <inc/kernel/hpet/hpet.hpp>
 
 Apic::Apic(KShell *kshell) {
     this->kshell = kshell;
@@ -73,4 +74,25 @@ void Apic::timer_init(uint8_t vector, uint32_t initial_count) {
 
     // Set initial count — timer starts counting down immediately
     lapic_write(LAPIC_TIMER_ICR, initial_count);
+}
+
+void Apic::calibrate(HPET* hpet) {
+    if (!hpet || hpet->get_period_fs() == 0)
+        return;
+
+    // One-shot mode, masked, vector 0
+    lapic_write(LAPIC_TIMER, 0 | LAPIC_TIMER_MASKED);
+
+    lapic_write(LAPIC_TIMER_DCR, 0x3);
+
+    uint32_t test_count = 0xFFFFFFFF;
+    lapic_write(LAPIC_TIMER_ICR, test_count);
+
+    // Wait 10 ms using HPET
+    uint64_t target = (10000000ULL * 1000000ULL) / hpet->get_period_fs();
+    uint64_t start = hpet->read_counter();
+    while ((hpet->read_counter() - start) < target);
+
+    uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
+    calibrated_10ms = test_count - remaining;
 }

@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<!-- saved from url=(0049)https://samwho.dev/blog/context-switching-on-x86/ -->
+<html lang="en" data-theme="light"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  
+  <meta name="HandheldFriendly" content="True">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer-when-downgrade">
+  <meta name="format-detection" content="telephone=no">
+  </head><body><a rel="me" href="https://octodon.social/@samwho"></a>
+  <a rel="me" href="https://hachyderm.io/@samwho"></a>
+
+  <title>Context Switching on x86</title>
+
+  <link rel="stylesheet" href="./Context Switching on x86_files/reset.css" async="">
+  <link rel="stylesheet" href="./Context Switching on x86_files/main.css" async="">
+
+  
+  <link rel="alternate" type="application/rss+xml" title="RSS" href="https://samwho.dev/rss.xml">
+  
+
+  
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:creator" content="@samwhoo">
+  
+  <meta name="twitter:image" content="/images/samwho-2018-banner.png">
+  <meta property="og:image" content="/images/samwho-2018-banner.png">
+  
+  
+  <meta name="twitter:description" content="Context switching is the method an operating system employs to implement
+&quot;multitasking&quot;. It&#39;s the practice of having multiple contexts of execution in
+your system, often called &quot;processes&quot;, and switching between them really, really
+quickly to create the illusion that multiple things are happening at the same
+time.
+It&#39;s also a good method for efficiently dealing with processes that need to wait
+for an IO request, such as a hard disk read, to return. While one process is
+waiting, another can execute.
+Prerequisite Knowledge: There will be some C and assembler in this post, so
+some familiarity with those languages would be good. Also, knowledge of what
+processor registers are will help.
+You may also want to read this post at least twice. Just saying.">
+  <meta property="og:description" content="Context switching is the method an operating system employs to implement
+&quot;multitasking&quot;. It&#39;s the practice of having multiple contexts of execution in
+your system, often called &quot;processes&quot;, and switching between them really, really
+quickly to create the illusion that multiple things are happening at the same
+time.
+It&#39;s also a good method for efficiently dealing with processes that need to wait
+for an IO request, such as a hard disk read, to return. While one process is
+waiting, another can execute.
+Prerequisite Knowledge: There will be some C and assembler in this post, so
+some familiarity with those languages would be good. Also, knowledge of what
+processor registers are will help.
+You may also want to read this post at least twice. Just saying.">
+  
+  <meta name="twitter:title" content="Context Switching on x86">
+  <meta property="og:title" content="Context Switching on x86">
+
+  
+  <meta property="og:type" content="article">
+  <meta property="og:published_date" content="2013-06-01">
+  <meta property="og:author" content="Sam Rose">
+  
+
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  <script>
+    const url = new URL(window.location.href);
+    const params = url.searchParams;
+    if (params.get("theme") === "dark") {
+      document.documentElement.dataset.theme = "dark";
+    } else {
+      document.documentElement.dataset.theme = "light";
+    }
+  </script>
+
+  
+  
+
+
+
+  
+  <div class="bar" role="presentation">
+    <div class="segment"></div>
+    <div class="segment"></div>
+    <div class="segment"></div>
+    <div class="segment"></div>
+    <div class="segment"></div>
+  </div>
+  
+
+  
+
+
+
+
+<a href="https://samwho.dev/blog/context-switching-on-x86/#content" style="display: none">Skip to main content</a>
+
+<article class="post">
+    <header>
+        <a href="https://samwho.dev/">
+            <img class="hero" alt="samwho logo, a small keyboard arranged in a 3x2 grid, with &#39;sam&#39; at the top, and &#39;who&#39; at the bottom. A cable runs from the top of the keyboard to off the top of the screen." src="./Context Switching on x86_files/samwho-keyslogo.svg">
+        </a>
+        <h1>Context Switching on x86</h1>
+        <section class="post-meta" aria-label="published on  June  1, 2013">
+            2013-06-01
+        </section>
+    </header>
+    
+    <main id="content" class="content">
+        <p>Context switching is the method an operating system employs to implement
+"multitasking". It's the practice of having multiple contexts of execution in
+your system, often called "processes", and switching between them really, really
+quickly to create the illusion that multiple things are happening at the same
+time.</p>
+<p>It's also a good method for efficiently dealing with processes that need to wait
+for an IO request, such as a hard disk read, to return. While one process is
+waiting, another can execute.</p>
+<p><strong>Prerequisite Knowledge</strong>: There will be some C and assembler in this post, so
+some familiarity with those languages would be good. Also, knowledge of what
+processor registers are will help.</p>
+<p>You may also want to read this post at least twice. Just saying.</p>
+<span id="continue-reading"></span><h2 id="before-we-begin"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#before-we-begin">#</a>
+Before we begin</h2>
+<p>First, I want to talk about the ideas behind context switching, then I want to
+look at the <a rel="external" href="http://pdos.csail.mit.edu/6.828/2012/xv6.html">xv6</a> implementation
+of context switching, then I'd like to talk a little bit about hardware vs
+software context switching.</p>
+<p>If you're unfamiliar with xv6, it's well worth checking out. It's an
+educational reimplementation of the Unix V6 kernel with a very well written and
+well documented source base. I'll be referring to it throughout this post, so I
+would checkout the source code. Instructions to do that are on their website.</p>
+<h2 id="the-basics"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#the-basics">#</a>
+The Basics</h2>
+<p>Context switching mechanisms are platform specific. Depending on what processor
+architecture you're using, your context switching will look very different. I'm
+going to cover x86 (32 bit), as that's the only one I know about in any detail.</p>
+<p>The general idea is that your processor has a state, which is the current
+contents of all of its registers. Each process will contain a copy of the state
+that it's in when it gets swapped off the processor, and when it later gets
+swapped back on that state will get restored. This allows processes to be paused
+and resumed at a later time.</p>
+<p>Your processor doesn't have any knowledge of processes, though. Not really.  The
+processor only really executes one set of instructions at a time in a (mostly)
+linear fashion, so how do we convince it to jump between multiple processes?  We
+need to have a list of processes, each containing processor state.  We also need
+to have a means of jumping out of a running process and doing all of the logic
+necessary to swap it off the processor and swap its successor on.</p>
+<h2 id="what-is-a-process"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#what-is-a-process">#</a>
+What is a process?</h2>
+<p>From a high level, we all know that a process is a running program in the
+system. It contains some binary executable code, some data, it can be sent
+signals, it can spawn children and it can die. But what data makes this
+possible? Let's take a look at what xv6 considers enough information to
+represent a process:</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-comment">// Per-process state</span></span>
+<span class="giallo-l"><span class="z-storage z-type">struct</span><span> proc {</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> sz;</span><span class="z-comment">                     // Size of process memory (bytes)</span></span>
+<span class="giallo-l"><span class="z-support z-type">  pde_t</span><span class="z-keyword">*</span><span> pgdir;</span><span class="z-comment">                // Page table</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  char</span><span class="z-keyword"> *</span><span>kstack;</span><span class="z-comment">                // Bottom of kernel stack for this process</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  enum</span><span> procstate state;</span><span class="z-comment">        // Process state</span></span>
+<span class="giallo-l"><span class="z-storage">  volatile</span><span class="z-storage z-type"> int</span><span> pid;</span><span class="z-comment">            // Process ID</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  struct</span><span> proc </span><span class="z-keyword">*</span><span>parent;</span><span class="z-comment">         // Parent process</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  struct</span><span> trapframe </span><span class="z-keyword">*</span><span>tf;</span><span class="z-comment">        // Trap frame for current syscall</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  struct</span><span> context </span><span class="z-keyword">*</span><span>context;</span><span class="z-comment">     // swtch() here to run process</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  void</span><span class="z-keyword"> *</span><span>chan;</span><span class="z-comment">                  // If non-zero, sleeping on chan</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  int</span><span> killed;</span><span class="z-comment">                  // If non-zero, have been killed</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  struct</span><span> file </span><span class="z-keyword">*</span><span class="z-variable">ofile[NOFILE];</span><span class="z-comment">  // Open files</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  struct</span><span> inode </span><span class="z-keyword">*</span><span>cwd;</span><span class="z-comment">           // Current directory</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  char</span><span class="z-variable"> name[</span><span class="z-constant z-numeric">16</span><span>];</span><span class="z-comment">               // Process name (debugging)</span></span>
+<span class="giallo-l"><span>};</span></span></code></pre>
+<p>Lots of interesting things in there. A lot of them are pretty obvious, such as
+the process ID, the size of the process memory, the parent process and so on.
+Other things are a little less obvious. Why does it need a kernel stack, for
+example? And what's a trap frame?</p>
+<h3 id="kernel-stacks"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#kernel-stacks">#</a>
+Kernel Stacks</h3>
+<p>Every process in xv6 needs a kernel stack for handling system calls. If, for
+example, a process gets stopped mid way through a system call and a new process
+starts, it would be a really bad idea if the new process started in the middle
+of a shared kernel stack. It would be equivalent to all user processes sharing
+one big stack, and because sharing stacks is a bad idea, each process has its
+own user and kernel stack.</p>
+<p>Another reason it's really useful to have a kernel stack for each user-mode
+process is that even if the user mangles its user-mode stack, the kernel stack
+will be intact and the operating system will be able to handle the failure
+gracefully.</p>
+<h3 id="interrupts-and-trap-frames"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#interrupts-and-trap-frames">#</a>
+Interrupts and Trap Frames</h3>
+<p>An integral part of the x86 architecture is its interrupt system. The processor
+can, at any time and for a variety of reasons, be interrupted and asked to do
+something else. Examples of types of interrupts include divide by zero, access
+to memory that doesn't belong to you or is protected, IO requests returning,
+keyboard events and a special "timer" interrupt that happens periodically. This
+is how "pre-emptive process scheduling" is implemented. All of these things
+require multiple context switches. (Every single keypress you do requires at
+least 2 context switches!).</p>
+<p>There is a piece of hardware inside your computer called a "programmable
+interval timer"*, which can be told to generate an interrupt after a given amount
+of time. In xv6, it is told to fire every 100 milliseconds, and xv6 has set the
+PIT interrupt number to point at its process scheduling code, which handles
+context switches.</p>
+<p>The trap frame stored in the <code>proc</code> struct, however, is concerned only with
+system calls. xv6 implements its system calls in a similar way to Linux, by
+having the software interrupt number <code>0x80</code> (decimal 64) be handled as a system
+call. The user stores the system call number into the <code>eax</code> register, fires an
+<code>int 0x80</code>, the processor looks up the handler for that interrupt, and then the
+OS transitions into kernel mode.</p>
+<p>Part of the kernel mode transition involves creating a "trap frame", which looks
+like this (<code>x86.h</code> file in xv6):</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-comment">// Layout of the trap frame built on the stack by the</span></span>
+<span class="giallo-l"><span class="z-comment">// hardware and by trapasm.S, and passed to trap().</span></span>
+<span class="giallo-l"><span class="z-storage z-type">struct</span><span> trapframe {</span></span>
+<span class="giallo-l"><span class="z-comment">  // registers as pushed by pusha</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> edi;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> esi;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> ebp;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> oesp;</span><span class="z-comment">      // useless &amp; ignored</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> ebx;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> edx;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> ecx;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> eax;</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // rest of trap frame</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> gs;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> padding1;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> fs;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> padding2;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> es;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> padding3;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> ds;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> padding4;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> trapno;</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // below here defined by x86 hardware</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> err;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> eip;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> cs;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> padding5;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> eflags;</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // below here only when crossing rings, such as from user to kernel</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> esp;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> ss;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  ushort</span><span> padding6;</span></span>
+<span class="giallo-l"><span>};</span></span></code></pre>
+<p>This is built on the stack for all interrupts that happen and serves as a way for
+the operating system to tell the processor where to jump back to after the
+interrupt has been handled.</p>
+<p>When xv6 handles a system call, the current process's <code>proc-&gt;tf</code> is set to the
+interrupt trap frame, which contains the register set that will get restored to
+the processor when the system call retuns. This way, system calls can interact
+with the register set and give return values back to user mode.</p>
+<p>System call code in xv6, found in <code>syscall.c</code>:</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-storage z-type">void</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">syscall</span><span>(</span><span class="z-storage z-type">void</span><span>)</span></span>
+<span class="giallo-l"><span>{</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  int</span><span> num;</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // Get the syscall number from eax</span></span>
+<span class="giallo-l"><span>  num </span><span class="z-keyword">=</span><span class="z-variable"> proc-&gt;tf-&gt;eax;</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // Check that the syscall number is greater than 0, inside the range of total</span></span>
+<span class="giallo-l"><span class="z-comment">  // syscalls and that a function pointer exists for that syscall number.</span></span>
+<span class="giallo-l"><span class="z-keyword">  if</span><span>(num </span><span class="z-keyword">&gt;</span><span class="z-constant z-numeric"> 0</span><span class="z-keyword"> &amp;&amp;</span><span> num </span><span class="z-keyword">&lt;</span><span class="z-entity z-name z-function"> NELEM</span><span>(syscalls)</span><span class="z-keyword"> &amp;&amp;</span><span class="z-variable"> syscalls[num]) {</span></span>
+<span class="giallo-l"><span class="z-comment">    // Set eax to the return value of the syscall.</span></span>
+<span class="giallo-l"><span class="z-variable">    proc-&gt;tf-&gt;eax</span><span class="z-keyword"> =</span><span class="z-variable"> syscalls[num]();</span></span>
+<span class="giallo-l"><span>  }</span><span class="z-keyword"> else</span><span> {</span></span>
+<span class="giallo-l"><span class="z-comment">    // Else print an error and return -1 to the user program.</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">    cprintf</span><span>(</span><span class="z-string">"</span><span class="z-constant z-other">%d %s</span><span class="z-string">: unknown sys call </span><span class="z-constant z-other z-constant z-character">%d\n</span><span class="z-string">"</span><span>,</span></span>
+<span class="giallo-l"><span class="z-variable">            proc-&gt;pid, proc-&gt;name, num);</span></span>
+<span class="giallo-l"><span class="z-variable">    proc-&gt;tf-&gt;eax</span><span class="z-keyword"> = -</span><span class="z-constant z-numeric">1</span><span>;</span></span>
+<span class="giallo-l"><span>  }</span></span>
+<span class="giallo-l"><span>}</span></span></code></pre><h3 id="disabling-and-re-enabling-interrupts"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#disabling-and-re-enabling-interrupts">#</a>
+Disabling and re-enabling interrupts</h3>
+<p>Sometimes we don't want the processor to be interrupted because we may leave
+really important data structures in an inconsistent state.  x86 offers two
+commands to deal with this called <code>cli</code> and <code>sti</code>, clear interrupts and set
+interrupts respectively. These two commands manipulate a bit inside the eflags
+register to tell the processor whether or not we are currently interested in
+handling interrupts.</p>
+<p>When we've cleared interrupts, we stop handling them but they do get queued up
+internally by the processor. When we restore interrupts, the queued up
+interrupts start getting processed again. This makes sense. You wouldn't want to
+completely ignore them otherwise you would have processes waiting on IO results
+that have been thrown away.</p>
+<p>In <code>spinlock.c</code> there are definitions for <code>pushcli()</code> and <code>popcli()</code>, which are
+a "matched" interface to the x86 <code>cli</code> and <code>sti</code> instructions. So it takes two
+calls to <code>popcli()</code> to restore interrupts after two calls to <code>pushcli()</code>. This
+makes it easier to handle the clearing of interrupts when multiple parts of the
+code base are calling <code>cli</code> and <code>sti</code>. Without them, you could end up with
+functions turning interrupts back on before other parts of the code base are
+ready for them.</p>
+<p>If that's still unclear, imagine the following code:</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-storage z-type">void</span><span class="z-entity z-name z-function"> func1</span><span>(</span><span class="z-storage z-type">void</span><span>) {</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  cli</span><span>();</span></span>
+<span class="giallo-l"><span class="z-comment">  // important stuff</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  func2</span><span>();</span></span>
+<span class="giallo-l"><span class="z-comment">  // more important stuff</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  sti</span><span>();</span></span>
+<span class="giallo-l"><span class="z-keyword">  return</span><span>;</span></span>
+<span class="giallo-l"><span>}</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-storage z-type">void</span><span class="z-entity z-name z-function"> func2</span><span>(</span><span class="z-storage z-type">void</span><span>) {</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  cli</span><span>();</span></span>
+<span class="giallo-l"><span class="z-comment">  // important stuff</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  sti</span><span>();</span></span>
+<span class="giallo-l"><span class="z-keyword">  return</span><span>;</span></span>
+<span class="giallo-l"><span>}</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">func1</span><span>();</span></span></code></pre>
+<p>There is a gigantic problem in the above code. <code>func2()</code> is calling <code>sti()</code>, but
+when it returns, <code>func1()</code> still expects interrupts to be off and does some
+important things. To get around that problem, we would rewrite the above code
+like so:</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-storage z-type">void</span><span class="z-entity z-name z-function"> func1</span><span>(</span><span class="z-storage z-type">void</span><span>) {</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  pushcli</span><span>();</span></span>
+<span class="giallo-l"><span class="z-comment">  // important stuff</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  func2</span><span>();</span></span>
+<span class="giallo-l"><span class="z-comment">  // more important stuff</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  popcli</span><span>();</span></span>
+<span class="giallo-l"><span class="z-keyword">  return</span><span>;</span></span>
+<span class="giallo-l"><span>}</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-storage z-type">void</span><span class="z-entity z-name z-function"> func2</span><span>(</span><span class="z-storage z-type">void</span><span>) {</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  pushcli</span><span>();</span></span>
+<span class="giallo-l"><span class="z-comment">  // important stuff</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  popcli</span><span>();</span></span>
+<span class="giallo-l"><span class="z-keyword">  return</span><span>;</span></span>
+<span class="giallo-l"><span>}</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">func1</span><span>();</span></span></code></pre>
+<p>This way, interrupts would only be turned back on when the <code>popcli()</code> inside of
+<code>func1()</code> has been called.</p>
+<h2 id="detailed-steps-for-context-switching"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#detailed-steps-for-context-switching">#</a>
+Detailed steps for context switching</h2>
+<p>Let's envisage a scenario. Process 1 is running, process 2 is waiting to run.
+The PIT throws an interrupt. This causes the processor to stop what it's doing,
+abandon process 1, create a trap frame and transition into kernel mode. When an
+interrupt is caught, there is a generic catch-all that sets up the trap frame
+and any trap information the processor has given us and then calls the C
+function <code>trap()</code>. Here's the assembler for that:</p>
+<pre class="giallo z-code"><code data-lang="plain"><span class="giallo-l"><span>#include "mmu.h"</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  # vectors.S sends all traps here.</span></span>
+<span class="giallo-l"><span>.globl alltraps</span></span>
+<span class="giallo-l"><span>alltraps:</span></span>
+<span class="giallo-l"><span>  # Build trap frame.</span></span>
+<span class="giallo-l"><span>  pushl %ds</span></span>
+<span class="giallo-l"><span>  pushl %es</span></span>
+<span class="giallo-l"><span>  pushl %fs</span></span>
+<span class="giallo-l"><span>  pushl %gs</span></span>
+<span class="giallo-l"><span>  pushal</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  # Set up data and per-cpu segments.</span></span>
+<span class="giallo-l"><span>  movw $(SEG_KDATA&lt;&lt;3), %ax</span></span>
+<span class="giallo-l"><span>  movw %ax, %ds</span></span>
+<span class="giallo-l"><span>  movw %ax, %es</span></span>
+<span class="giallo-l"><span>  movw $(SEG_KCPU&lt;&lt;3), %ax</span></span>
+<span class="giallo-l"><span>  movw %ax, %fs</span></span>
+<span class="giallo-l"><span>  movw %ax, %gs</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  # Call trap(tf), where tf=%esp</span></span>
+<span class="giallo-l"><span>  pushl %esp</span></span>
+<span class="giallo-l"><span>  call trap # &lt;- ENTRY INTO C TRAP FUNCTION</span></span>
+<span class="giallo-l"><span>  addl $4, %esp</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  # Return falls through to trapret...</span></span>
+<span class="giallo-l"><span>.globl trapret</span></span>
+<span class="giallo-l"><span>trapret:</span></span>
+<span class="giallo-l"><span>  popal</span></span>
+<span class="giallo-l"><span>  popl %gs</span></span>
+<span class="giallo-l"><span>  popl %fs</span></span>
+<span class="giallo-l"><span>  popl %es</span></span>
+<span class="giallo-l"><span>  popl %ds</span></span>
+<span class="giallo-l"><span>  addl $0x8, %esp  # trapno and errcode</span></span>
+<span class="giallo-l"><span>  iret</span></span></code></pre><h3 id="vector-s"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#vector-s">#</a>
+vector.S</h3>
+<p>The comment at the top of the above assembler snippet mentions <code>vector.S</code>, but
+you probably won't find that file inside the xv6 repo. Why? The reason is that
+x86 doesn't make interrupt management easy, and to handle all interrupts in a
+way that allows you to identify what interrupt happened you need to set up 256
+interrupt handlers in assembly. Not fun. xv6 handles this with a Perl script:</p>
+<pre class="giallo z-code"><code data-lang="perl"><span class="giallo-l"><span class="z-comment"># Generate vectors.S, the trap/interrupt entry points.</span></span>
+<span class="giallo-l"><span class="z-comment"># There has to be one entry point per interrupt number</span></span>
+<span class="giallo-l"><span class="z-comment"># since otherwise there's no way for trap() to discover</span></span>
+<span class="giallo-l"><span class="z-comment"># the interrupt number.</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-support z-function">print</span><span class="z-string"> "# generated by vectors.pl - do not edit</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-support z-function">print</span><span class="z-string"> "# handlers</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-support z-function">print</span><span class="z-string"> ".globl alltraps</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-keyword">for</span><span>(</span><span class="z-storage">my</span><span class="z-variable"> $i = 0; $i &lt; 256; $i++){</span></span>
+<span class="giallo-l"><span class="z-support z-function">    print</span><span class="z-string"> ".globl vector</span><span class="z-variable">$i</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-support z-function">    print</span><span class="z-string"> "vector</span><span class="z-variable">$i</span><span class="z-string">:</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-keyword">    if</span><span class="z-variable">(!($i == 8 || ($i &gt;= 10 &amp;&amp; $i &lt;= 14) || $i == 17)){</span></span>
+<span class="giallo-l"><span class="z-support z-function">        print</span><span class="z-string"> "  pushl </span><span class="z-constant z-character">\$</span><span class="z-string">0</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span>    }</span></span>
+<span class="giallo-l"><span class="z-support z-function">    print</span><span class="z-string"> "  pushl </span><span class="z-constant z-character">\$</span><span class="z-variable">$i</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-support z-function">    print</span><span class="z-string"> "  jmp alltraps</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span>}</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-support z-function">print</span><span class="z-string"> "</span><span class="z-constant z-character">\n</span><span class="z-string"># vector table</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-support z-function">print</span><span class="z-string"> ".data</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-support z-function">print</span><span class="z-string"> ".globl vectors</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-support z-function">print</span><span class="z-string"> "vectors:</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span class="z-keyword">for</span><span>(</span><span class="z-storage">my</span><span class="z-variable"> $i = 0; $i &lt; 256; $i++){</span></span>
+<span class="giallo-l"><span class="z-support z-function">    print</span><span class="z-string"> "  .long vector</span><span class="z-variable">$i</span><span class="z-constant z-character">\n</span><span class="z-string">"</span><span>;</span></span>
+<span class="giallo-l"><span>}</span></span></code></pre>
+<p>The important bit to note is that everything jumps into the <code>alltraps</code> assembler
+label seen above, which passes control into the <code>trap()</code> function in C.</p>
+<h3 id="continuing-the-example"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#continuing-the-example">#</a>
+Continuing the example...</h3>
+<p>We're now in process 1's kernel stack in the trap handler and we need to find a
+new process to run. Because this is a timer interrupt, the following bit of code
+inside of the <code>trap()</code> function in <code>trap.c</code> will run:</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-comment">// Force process to give up CPU on clock tick.</span></span>
+<span class="giallo-l"><span class="z-comment">// If interrupts were on while locks held, would need to check nlock.</span></span>
+<span class="giallo-l"><span class="z-keyword">if</span><span>(proc </span><span class="z-keyword">&amp;&amp;</span><span> proc</span><span class="z-keyword">-&gt;</span><span>state </span><span class="z-keyword">==</span><span> RUNNING </span><span class="z-keyword">&amp;&amp;</span><span> tf</span><span class="z-keyword">-&gt;</span><span>trapno </span><span class="z-keyword">==</span><span> T_IRQ0</span><span class="z-keyword">+</span><span>IRQ_TIMER)</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  yield</span><span>();</span></span></code></pre>
+<p>Let's dig into what <code>yield()</code> is doing (<code>proc.c</code>):</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-comment">// Give up the CPU for one scheduling round.</span></span>
+<span class="giallo-l"><span class="z-storage z-type">void</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">yield</span><span>(</span><span class="z-storage z-type">void</span><span>)</span></span>
+<span class="giallo-l"><span>{</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  acquire</span><span>(</span><span class="z-keyword">&amp;</span><span class="z-variable">ptable.lock);</span></span>
+<span class="giallo-l"><span class="z-variable">  proc-&gt;state</span><span class="z-keyword"> =</span><span> RUNNABLE;</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  sched</span><span>();</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  release</span><span>(</span><span class="z-keyword">&amp;</span><span class="z-variable">ptable.lock);</span></span>
+<span class="giallo-l"><span>}</span></span></code></pre>
+<p>So first we're acquiring a lock on the process table. This is to avoid race
+conditions when multiple processors are running scheduling code. Then we set the
+current process's state to <code>RUNNABLE</code>, and we call a function called <code>sched()</code>
+(in <code>proc.c</code>):</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-comment">// Enter scheduler.  Must hold only ptable.lock</span></span>
+<span class="giallo-l"><span class="z-comment">// and have changed proc-&gt;state.</span></span>
+<span class="giallo-l"><span class="z-storage z-type">void</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">sched</span><span>(</span><span class="z-storage z-type">void</span><span>)</span></span>
+<span class="giallo-l"><span>{</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  int</span><span> intena;</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // If we aren't holding the ptable lock, panic</span></span>
+<span class="giallo-l"><span class="z-keyword">  if</span><span>(</span><span class="z-keyword">!</span><span class="z-entity z-name z-function">holding</span><span>(</span><span class="z-keyword">&amp;</span><span class="z-variable">ptable.lock))</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">    panic</span><span>(</span><span class="z-string">"sched ptable.lock"</span><span>);</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // If we aren't 1 pushcli level deep, panic</span></span>
+<span class="giallo-l"><span class="z-keyword">  if</span><span class="z-variable">(cpu-&gt;ncli</span><span class="z-keyword"> !=</span><span class="z-constant z-numeric"> 1</span><span>)</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">    panic</span><span>(</span><span class="z-string">"sched locks"</span><span>);</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // If the current process is in the running state, panic</span></span>
+<span class="giallo-l"><span class="z-keyword">  if</span><span class="z-variable">(proc-&gt;state</span><span class="z-keyword"> ==</span><span> RUNNING)</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">    panic</span><span>(</span><span class="z-string">"sched running"</span><span>);</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span class="z-comment">  // If the processor can be interrupted, panic</span></span>
+<span class="giallo-l"><span class="z-keyword">  if</span><span>(</span><span class="z-entity z-name z-function">readeflags</span><span>()</span><span class="z-keyword">&amp;</span><span>FL_IF)</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">    panic</span><span>(</span><span class="z-string">"sched interruptible"</span><span>);</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  intena </span><span class="z-keyword">=</span><span class="z-variable"> cpu-&gt;intena;</span></span>
+<span class="giallo-l"><span class="z-entity z-name z-function">  swtch</span><span>(</span><span class="z-keyword">&amp;</span><span class="z-variable">proc-&gt;context, cpu-&gt;scheduler);</span></span>
+<span class="giallo-l"><span class="z-variable">  cpu-&gt;intena</span><span class="z-keyword"> =</span><span> intena;</span></span>
+<span class="giallo-l"><span>}</span></span></code></pre>
+<p>The majority of <code>sched()</code> is concerned with making sure it's safe to schedule a
+new process. First it checks that we're holding the process table lock, then it
+checks to make sure we're only one <code>pushcli()</code> level deep, then it makes sure
+the process being swapped off is not still running, then it checks if interrupts
+have been cleared. The last check feels a lot like a "just in case", because in
+theory the <code>cpu-&gt;ncli</code> check should cover it.</p>
+<p>If any of the above is true, we cannot safely schedule a new process and the
+kernel panics.</p>
+<p>The <code>cpu-&gt;intena</code> is a variable that stores whether or not interrupts were
+enabled before a <code>pushcli</code> call. The only place in the xv6 code that
+<code>cpu-&gt;intena</code> seems to be used is in <code>spinlock.c</code> but I can't quite understand
+what it's doing. I don't think it's particularly important for this explanation,
+though, and we can skip over it without much trouble.</p>
+<p>The next important call inside of <code>sched()</code> is the call to <code>swtch()</code>. This is
+the meat and potatoes of the operation, where the actual context switching
+happens. It passes in a pointer to the current process's context, so that the
+current registers can be saved, and it passes in the scheduler's context to be
+switched to. It makes sense, in that case, that this part is implemented in
+assembler (<code>swtch.S</code>):</p>
+<pre class="giallo z-code"><code data-lang="plain"><span class="giallo-l"><span># Context switch</span></span>
+<span class="giallo-l"><span>#</span></span>
+<span class="giallo-l"><span>#   void swtch(struct context **old, struct context *new);</span></span>
+<span class="giallo-l"><span>#</span></span>
+<span class="giallo-l"><span># Save current register context in old</span></span>
+<span class="giallo-l"><span># and then load register context from new.</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>.globl swtch</span></span>
+<span class="giallo-l"><span>swtch:</span></span>
+<span class="giallo-l"><span>  movl 4(%esp), %eax</span></span>
+<span class="giallo-l"><span>  movl 8(%esp), %edx</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  # Save old callee-save registers</span></span>
+<span class="giallo-l"><span>  pushl %ebp</span></span>
+<span class="giallo-l"><span>  pushl %ebx</span></span>
+<span class="giallo-l"><span>  pushl %esi</span></span>
+<span class="giallo-l"><span>  pushl %edi</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  # Switch stacks</span></span>
+<span class="giallo-l"><span>  movl %esp, (%eax)</span></span>
+<span class="giallo-l"><span>  movl %edx, %esp</span></span>
+<span class="giallo-l"></span>
+<span class="giallo-l"><span>  # Load new callee-save registers</span></span>
+<span class="giallo-l"><span>  popl %edi</span></span>
+<span class="giallo-l"><span>  popl %esi</span></span>
+<span class="giallo-l"><span>  popl %ebx</span></span>
+<span class="giallo-l"><span>  popl %ebp</span></span>
+<span class="giallo-l"><span>  ret</span></span></code></pre>
+<p>Tada! This is what we've been looking for. <code>swtch()</code> takes two context structs,
+that look like this (<code>proc.h</code>):</p>
+<pre class="giallo z-code"><code data-lang="c"><span class="giallo-l"><span class="z-comment">// Saved registers for kernel context switches.</span></span>
+<span class="giallo-l"><span class="z-comment">// Don't need to save all the segment registers (%cs, etc),</span></span>
+<span class="giallo-l"><span class="z-comment">// because they are constant across kernel contexts.</span></span>
+<span class="giallo-l"><span class="z-comment">// Don't need to save %eax, %ecx, %edx, because the</span></span>
+<span class="giallo-l"><span class="z-comment">// x86 convention is that the caller has saved them.</span></span>
+<span class="giallo-l"><span class="z-comment">// Contexts are stored at the bottom of the stack they</span></span>
+<span class="giallo-l"><span class="z-comment">// describe; the stack pointer is the address of the context.</span></span>
+<span class="giallo-l"><span class="z-comment">// The layout of the context matches the layout of the stack in swtch.S</span></span>
+<span class="giallo-l"><span class="z-comment">// at the "Switch stacks" comment. Switch doesn't save eip explicitly,</span></span>
+<span class="giallo-l"><span class="z-comment">// but it is on the stack and allocproc() manipulates it.</span></span>
+<span class="giallo-l"><span class="z-storage z-type">struct</span><span> context {</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> edi;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> esi;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> ebx;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> ebp;</span></span>
+<span class="giallo-l"><span class="z-storage z-type">  uint</span><span> eip;</span></span>
+<span class="giallo-l"><span>};</span></span></code></pre>
+<p>It contains only the registers necessary for performing a context switch, and
+you can see in <code>swtch()</code> that all we need to do is push the current context
+values, switch the stack pointer, then pop the context values from the new stack
+into the appropriate registers. Magic.</p>
+<p>The rest of the process is less concerned with context switching and more
+concerned with picking a new process to run, which is a completely different
+kettle of fish.</p>
+<h2 id="hardware-context-switching"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#hardware-context-switching">#</a>
+Hardware context switching</h2>
+<p>x86 offers a method for doing context switching in hardware, which sounds as if
+it would be faster than software methods but in practice this doesn't turn out
+to be the case. (According to various reading around the web. I've not run any
+benchmarks on this personally).</p>
+<p>The problem with hardware context switching is that it handles more registers
+than it needs to for modern OS implementations. For example, Linux uses what's
+called a
+"<a rel="external" href="http://en.wikipedia.org/wiki/X86_memory_segmentation#Practices">flat memory model</a>",
+which means all of the "segment selectors" are zeroed and never change.</p>
+<h3 id="segment-selectors"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#segment-selectors">#</a>
+Segment Selectors</h3>
+<p>You're probably thinking "what the fuck are segment selectors?". x86 uses a
+segmented memory model, which means that all of memory is split up in 65kb
+segments and everything is accessed with a segment selector (<code>%cs</code> for code
+segment, <code>%ds</code> for data segment and so on) and an offset. At least, that's what
+people used to do. These days it is far more preferable to set all of the
+segment selectors to 0 and access memory as if it were "flat".</p>
+<p>Whenever a segment selector is changed, the processor performs security checks
+on the new values to make sure they're valid and a whole host of other stuff
+that I don't fully understand. This is an overhead that is unnecessary and
+causes hardware context switching to be slower than software context switching
+in most cases.</p>
+<p>Also, the x86-64 architecture has dropped support for hardware context switching
+according to the
+<a rel="external" href="http://wiki.osdev.org/Context_Switching#Hardware_Context_Switching">OSDev wiki</a>.</p>
+<h2 id="wrapping-up"><a class="anchor" href="https://samwho.dev/blog/context-switching-on-x86/#wrapping-up">#</a>
+Wrapping up</h2>
+<p>So that's context switching in about as much detail as I can really offer. xv6
+is a really awesome code base and I've learnt a lot about relatively simple yet
+realistic kernel implementations without having to go through the pain of
+reading the Linux source code.</p>
+<p>Once I'm at the stage where I fully understand xv6 and can tinker around with it
+confidently, I fully intend to move up to the Linux code base and start messing
+with that.</p>
+<p>I think a natural follow-on topic from this post would be to talk about
+scheduling algorithms. I might do that, but it does feel a bit too much like
+being back in University. I dunno, I'll see how I feel :)</p>
+
+    </main>
+</article>
+
+
+<footer class="newsletter-footer">
+  <div>
+    Made with ❤️ by Sam Rose
+  </div>
+  <svg id="sam-rose-signature" xmlns="http://www.w3.org/2000/svg" viewBox="50 154 640.1 157" style="color: var(--color); width: 150px; display: block">
+    <style>
+      #sam-rose-signature path {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 6;
+        stroke-linecap: round;
+        stroke-dasharray: 1;
+        stroke-dashoffset: 1;
+        opacity: 0;
+      }
+
+      #sam-rose-signature.in-view path:nth-of-type(1) {
+        animation: draw 0.9s ease forwards;
+      }
+
+      #sam-rose-signature.in-view path:nth-of-type(2) {
+        animation: draw 1.5s ease-out forwards;
+        animation-delay: 0.9s;
+      }
+
+      #sam-rose-signature.in-view path:nth-of-type(3) {
+        animation: draw 0.4s ease forwards;
+        animation-delay: 2.4s;
+      }
+
+      @keyframes draw {
+        0% {
+          stroke-dashoffset: 1;
+          opacity: 0;
+        }
+        1% {
+          opacity: 1;
+        }
+        100% {
+          stroke-dashoffset: 0;
+          opacity: 1;
+        }
+      }
+    </style>
+
+    <path pathLength="1" d="M279 180h-6 0-4 0-4 0-4 0-4 0-4 0-4.1 0l-4 .5h0l-4 .6h0l-4 .6h0l-3.9.7h0l-4 .6h0l-3.9.8h0l-3.9.8h0l-4 .9h0l-3.9.8h0l-3.9.8h0l-4 .8h0l-3.9.8h0l-3.9.8h0q-2 .4-3.8 1h0L190 192h0l-3.7 1.5h0l-3.7 1.5h0q-1.9.8-3.5 1.9h0q-1.6 1-2.2 3h0q-.6 1.8-.4 3.8h0q.2 2 1.5 3.1h0q1.4 1.3 3.2 2h0l3.7 1.7h0q1.8.8 3.7 1.4h0l3.8 1.4h0l3.8 1.3h0l3.8 1.4h0l3.8 1.3h0l3.8 1.2h0l3.8 1.3h0q1.9.6 3.7 1.4h0l3.7 1.7h0l3.6 1.8h0l3.5 1.8h0q1.8 1 3.4 2.2h0l3.2 2.3h0q1.6 1.3 2.3 3.1h0q.8 1.9.6 3.8h0q-.1 2-1.2 3.5h0q-1.2 1.6-2.6 3h0q-1.4 1.4-3 2.5h0l-3.6 2h0l-3.6 1.6h0l-3.6 1.7h0l-3.8 1.5h0l-3.8 1.2h0l-3.8 1.3h0l-3.8 1.3h0l-3.8 1.2h0l-3.9 1.2h0l-3.8 1h0l-3.9 1.2h0l-3.8 1h0l-3.9 1.2h0l-3.9 1h0l-3.9.9h0l-4 .9h0l-3.8.9h0l-4 .9h0l-3.9.8h0l-3.9.9h0l-4 .7h0l-3.9.8h0l-4 .7h0l-3.9.8h0l-4 .6h0l-3.9.7h0l-4 .6h0l-4 .6h0l-3.9.7h0l-4 .5h0l-4 .5h0l-4 .4h0l-4 .5h0l-3.9.5h0l-4 .6h0l-4 .6h0l-4 .6h0l-3.9.4h0l-4 .4h0l-4 .6h0q-2 .3-3.8 1l-1.9.6"></path>
+
+    <path pathLength="1" d="m54 219 7-6.2q7-6.3 15.8-10.2h0q8.8-4 18-7.4h0l18.2-6.6h0q9.1-3.3 18.4-6.1h0l18.6-5.6h0q9.3-2.7 18.7-5.1h0q9.4-2.5 19-4h0l19.2-3.1h0l19.1-3h0q9.6-1.6 19.3-2.3h0q9.7-.7 19.4-1h0q9.7-.4 19.4-.4h19.4q9.7 0 19.4.7h0q9.6.7 19.1 2.8h0q9.5 2 16.7 7.3h0q7.3 5.3 1 11.7h0q-6.2 6.4-15.2 10h0q-9 3.5-18.4 6.3h0l-18.5 5.7h0L289 208h0l-18.6 5.5h0q-9.4 2.7-15.1 5.1h0q-5.7 2.4 4 2.4h0q9.7 0 19.2-1.5h0q9.6-1.5 19.1-3.6h0q9.5-2 19-3.6h0q9.7-1.5 19.3-2.6h0q9.7-1 19.3-2.4h0q9.6-1.3 19.2-2.9h0q9.6-1.5 19.2-2.6h0q9.7-1 15.8-3.1h0q6-2.1-3.6-3h0q-9.6-.7-19.3-.5h0q-9.7.3-19.4 1.4h0q-9.6 1-18.2 5.2h0q-8.5 4.1-2.7 8.8h0q5.9 4.6 15.6 5.3h0q9.6.8 19.3 1h0q9.7.1 19.4-.6h0q9.7-.7 19.1-2.9h0q9.5-2.1 19-4.5h0q9.3-2.4 18.2-6.2h0q8.8-3.8 5.2-8.9h0q-3.7-5-13.3-6.4h0q-9.5-1.4-19.2-1.9h0q-9.7-.5-19.4-.5h0q-9.7 0-12.5 3.1h0q-2.8 3.2 6.9 3.5h0q9.6.4 19.4.4h97q9.8 0 14-1.2h0q4.2-1.3-5.4-2h0q-9.7-.8-19.4-.8h0-19.4 0q-9.8 0-19.4.4h0q-9.7.3-3.4 2.2h0q6.4 2 16 2.5h0l19.5 1.2h0l19.4 1.2h0q9.6.6 19.3 1.5h0q9.7 1 5.2 5.1h0q-4.4 4.1-14 5.6h0q-9.6 1.5-19.3 2.2h0l-19.4 1.4h0q-9.6.7-4.5 1.7h0q5.2 1 15 1.4h0q9.6.5 19.3.5h0l19.4.4h0l19.5.5h0l19.4.2h37.6q8.5-.1-1.2-1h0q-9.6-.8-19.4-.9h0l-19.4-.1h0H561h0q-9.7 0-9.6 1.6h0q.2 1.6 9.8 2.8h0q9.6 1.2 19.3 1.8h0q9.7.6 19.3 1.8h0l19.3 2.3h0l19.3 2.1h0l19.3 2.4h0q9.6 1.3 19 3.3l9.4 1.9"></path>
+
+    <path pathLength="1" d="M132 307l2-1.7q2.2-1.6 4.7-2.1h0q2.6-.5 5.2-.7h0l5.4-.5h0l5.3-.4h0l5.3-.5h0l5.3-.6h0l5.4-.5h0l5.3-.8h0l5.2-.8h0l5.3-.8h0l5.3-.8h0l5.3-.9h0l5.3-.8h0l5.3-.7h0l5.3-.7h0l5.3-.7h0l5.3-.8h0l5.3-.7h0l5.3-.7h0l5.3-.7h0l5.3-.7h0l5.3-.7h0l5.3-.7h0l5.3-.7h0l5.3-.7h0l5.3-.8h0l5.3-.7h0l5.3-.7h0l5.3-.6h0l5.3-.7h0l5.3-.6h0l5.3-.6h0l5.3-.6h0l5.3-.6h0l5.3-.6h0l5.3-.6h0l5.3-.6h0l5.4-.6h0l5.3-.6h0l5.3-.5h0l5.3-.4h0l5.4-.4h0l5.3-.4h0l5.3-.4h0l5.4-.3h0l5.3-.4h0l5.3-.4h0l5.4-.4h0l5.3-.4h0l5.3-.3h0l5.4-.1h0l5.3-.1h0l5.4-.1h0l5.3-.1h0l5.4-.1h5.3l5.3-.2h5.4l5.3-.2h5.4l5.3-.1h42.8q2.7 0 5.3.2h0l5.4.2h0l5.3.3h0l5.4.3h0l5.3.2h0l5.3.3h0l5.4.3h0l5.3.3h0l5.3.5h0l5.4.5h0l5.3.5h0l5.3.5h0l5.3.6h0q2.7.2 5.3.6h0l5.3.7h0l5.3.7h0l5.3.7h0l5.3.8h0l5.3.8h0l5.3 1h0q2.6.4 5 1.2l2.5.8"></path>
+  </svg>
+
+  <div style="display: flex; gap: 0.5em">
+    <a href="https://twitter.com/samwhoo" target="_blank">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <g clip-path="url(#clip0_260_538)">
+          <path d="M23.2245 5.78963C22.4373 6.13838 21.591 6.37087 20.6981 6.48075C21.606 5.94187 22.3042 5.08238 22.632 4.06688C21.7826 4.56488 20.8417 4.9305 19.8405 5.12325C19.041 4.27575 17.9006 3.75 16.6372 3.75C14.2102 3.75 12.2433 5.7 12.2433 8.10413C12.2433 8.44425 12.2831 8.77575 12.3581 9.0975C8.70708 8.91412 5.46895 7.17863 3.30258 4.54463C2.92195 5.18813 2.70783 5.94187 2.70783 6.73725C2.70783 8.24887 3.48183 9.57937 4.66195 10.3635C3.94158 10.3414 3.26358 10.1411 2.66995 9.81975C2.66995 9.83288 2.66995 9.85238 2.66995 9.87075C2.66995 11.9831 4.18495 13.7419 6.19308 14.1424C5.82595 14.2429 5.4382 14.2987 5.03845 14.2987C4.75458 14.2987 4.4782 14.2665 4.21045 14.2185C4.76958 15.9446 6.39183 17.2065 8.3137 17.2436C6.80995 18.4095 4.9162 19.1077 2.8567 19.1077C2.50083 19.1077 2.1532 19.0875 1.80933 19.0459C3.75445 20.2778 6.06483 21 8.5447 21C16.6256 21 21.0461 14.364 21.0461 8.60737C21.0461 8.41875 21.0401 8.23088 21.0311 8.04525C21.894 7.43625 22.6372 6.6675 23.2245 5.78963Z" fill="#1DA1F2"></path>
+        </g>
+        <defs>
+          <clippath id="clip0_260_538">
+            <rect width="24" height="24" fill="white"></rect>
+          </clippath>
+        </defs>
+      </svg>
+    </a>
+    <a href="https://bsky.app/profile/samwho.dev" target="_blank">
+      <img src="./Context Switching on x86_files/bluesky.svg" style="width: 20px; height: 20px; transform: translateY(2px)">
+    </a>
+    <a href="https://samwho.dev/rss.xml">
+      <img src="./Context Switching on x86_files/rss.svg" alt="RSS feed icon" style="width: 24px">
+    </a>
+  </div>
+
+  <p style="font-size: 0.8rem">
+    If you want, get updates about new posts by email. No spam, ever.
+  </p>
+
+  <form action="https://buttondown.email/api/emails/embed-subscribe/samwho" method="post" target="popupwindow" onsubmit="window.open(&#39;https://buttondown.email/samwho&#39;, &#39;popupwindow&#39;)" class="embeddable-buttondown-form">
+    <input type="email" name="email" id="bd-email" placeholder="your@email.address">
+    <input type="submit" value="Subscribe">
+    <p>
+      <a href="https://buttondown.email/refer/samwho" target="_blank">powered by buttondown</a>
+    </p>
+  </form>
+</footer>
+
+<script>
+  const signature = document.getElementById('sam-rose-signature');
+
+  const observer = new IntersectionObserver(
+    ([entry]) => {
+      if (entry.isIntersecting && entry.intersectionRatio === 1) {
+        signature.classList.add('in-view');
+        observer.unobserve(signature);
+      }
+    },
+    {
+      threshold: 1.0
+    }
+  );
+
+  observer.observe(signature);
+</script>
+
+
+
+
+</body><style class="stylus">/* Applies to all URLs */
+* {
+    font-family: 'JetBrainsMono NF', 'JetBrains Mono', 'Cascadia Code', monospace !important;
+}
+
+/* Specifically targets code blocks to ensure ligatures look correct */
+code, pre, kbd, samp {
+    font-family: 'JetBrainsMono NF', 'JetBrains Mono', monospace !important;
+    font-feature-settings: "liga" on, "calt" on !important;
+}</style></html>

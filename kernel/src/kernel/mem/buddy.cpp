@@ -18,57 +18,54 @@ uintptr_t Buddy::alloc(int order) {
     if (order > MAX_ORDER)
         return 0;
 
+    // Try buddy free lists first
+    uintptr_t addr = split_alloc(order);
+    if (addr != 0)
+        return addr;
+
+    // Fallback: direct PMM for single pages
     if (order == 0)
         return pmm->alloc();
 
-    return split_alloc(order);
+    return 0;
 }
 
 void Buddy::free(uintptr_t addr, int order) {
     if (addr == 0 || order > MAX_ORDER)
         return;
 
-    if (order == 0) {
-        pmm->free(addr);
-        return;
-    }
-
     Node* node = (Node*)(addr + hhdm_offset);
 
-    // Scan the free list at this order to check if the buddy is free
-    uintptr_t buddy_addr = addr ^ (1ULL << (order + 12));
-    Node** prev_ptr = &free_lists[order];
-    Node* curr = free_lists[order];
-    bool buddy_found = false;
+    // Try to coalesce with the buddy at this order (if not at max)
+    if (order < MAX_ORDER) {
+        uintptr_t buddy_addr = addr ^ (1ULL << (order + 12));
+        Node** prev_ptr = &free_lists[order];
+        Node* curr = free_lists[order];
 
-    while (curr) {
-        if (curr->addr == buddy_addr) {
-            // Buddy is free! Remove it from the list.
-            *prev_ptr = curr->next;
-            free_counts[order]--;
-            buddy_found = true;
-            break;
+        while (curr) {
+            if (curr->addr == buddy_addr) {
+                // Buddy is free! Remove it and coalesce one level up.
+                *prev_ptr = curr->next;
+                free_counts[order]--;
+                uintptr_t merged_addr = (addr < buddy_addr) ? addr : buddy_addr;
+                free(merged_addr, order + 1);
+                return;
+            }
+            prev_ptr = &curr->next;
+            curr = curr->next;
         }
-        prev_ptr = &curr->next;
-        curr = curr->next;
     }
 
-    if (buddy_found) {
-        // Coalesce: merge with buddy at the lower address
-        uintptr_t merged_addr = (addr < buddy_addr) ? addr : buddy_addr;
-        free(merged_addr, order + 1);
-    } else {
-        // Just add to the free list
-        node->addr = addr;
-        node->next = free_lists[order];
-        free_lists[order] = node;
-        free_counts[order]++;
-        total_free_pages += (1ULL << order);
-    }
+    // No coalescing possible — add to the free list
+    node->addr = addr;
+    node->next = free_lists[order];
+    free_lists[order] = node;
+    free_counts[order]++;
+    total_free_pages += (1ULL << order);
 }
 
 uintptr_t Buddy::split_alloc(int order) {
-    if (order > MAX_ORDER || order == 0)
+    if (order > MAX_ORDER)
         return 0;
 
     for (int higher = order; higher <= MAX_ORDER; higher++) {

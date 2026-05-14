@@ -8,9 +8,8 @@ GDT::GDT(KShell *kshell, uint64_t KERNEL_STACK_SIZE, uint8_t *kernel_stack) {
     this->kshell = kshell;
     this->KERNEL_STACK_SIZE = KERNEL_STACK_SIZE;
     this->kernel_stack = kernel_stack;
-}
 
-void GDT::init_gdt() {
+    // --- GDT setup moved to constructor ---
     this->gdt_ptr.limit = sizeof(this->gdt_entries) - 1;
     this->gdt_ptr.base = reinterpret_cast<uint64_t>(&this->gdt_entries);
 

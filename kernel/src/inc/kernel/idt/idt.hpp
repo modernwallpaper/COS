@@ -58,3 +58,4 @@ class IDT {
 
 extern "C" void isr_handler(interrupt_frame *frame);
 extern "C" void irq_handler(interrupt_frame *frame);
+extern IDT* global_idt;

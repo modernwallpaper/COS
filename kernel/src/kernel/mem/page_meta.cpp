@@ -1,11 +1,12 @@
 #include <inc/kernel/mem/buddy.hpp>
 #include <inc/kernel/mem/page_meta.hpp>
+#include <inc/kernel/ports/ports.hpp>
 
 static uint8_t* meta;
 static uint8_t* orders;
 static uint64_t max_pfn;
 
-void page_meta_init(Buddy* buddy, uint64_t hhdm_offset, uint64_t max_pfn_val) {
+bool page_meta_init(Buddy* buddy, uint64_t hhdm_offset, uint64_t max_pfn_val) {
     max_pfn = max_pfn_val;
 
     uint64_t bytes = max_pfn * 2;
@@ -17,12 +18,18 @@ void page_meta_init(Buddy* buddy, uint64_t hhdm_offset, uint64_t max_pfn_val) {
         order++;
     }
 
-    if (block < bytes)
-        return;
+    if (block < bytes) {
+        serial_print("page_meta_init: max_pfn too large for MAX_ORDER\n");
+        return false;
+    }
 
     uintptr_t phys = buddy->alloc(order);
-    if (phys == 0)
-        return;
+    if (phys == 0) {
+        serial_print("page_meta_init: buddy alloc(order=");
+        serial_print_hex(order);
+        serial_print(") returned 0\n");
+        return false;
+    }
 
     uintptr_t virt = phys + hhdm_offset;
     uint64_t alloc_bytes = 0x1000 << order;
@@ -33,6 +40,7 @@ void page_meta_init(Buddy* buddy, uint64_t hhdm_offset, uint64_t max_pfn_val) {
 
     meta = (uint8_t*)virt;
     orders = meta + max_pfn;
+    return true;
 }
 
 PageType page_meta_get_type(uint64_t pfn) {

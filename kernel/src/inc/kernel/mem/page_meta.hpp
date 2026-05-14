@@ -10,7 +10,7 @@ enum PageType : uint8_t {
 
 class Buddy;
 
-void page_meta_init(Buddy* buddy, uint64_t hhdm_offset, uint64_t max_pfn);
+bool page_meta_init(Buddy* buddy, uint64_t hhdm_offset, uint64_t max_pfn);
 
 PageType page_meta_get_type(uint64_t pfn);
 void page_meta_set_type(uint64_t pfn, PageType type);

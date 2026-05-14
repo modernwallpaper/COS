@@ -9,6 +9,7 @@ global irq8,irq9,irq10,irq11,irq12,irq13,irq14,irq15
 global apic_timer_stub
 
 extern isr_handler
+extern scheduler_switch_if_needed
 
 ; ------------------------
 ; CPU EXCEPTIONS
@@ -63,6 +64,15 @@ isr_common:
     mov rdi, rsp        ; pointer to interrupt_frame
     call isr_handler
 
+    ; Only invoke the scheduler for the APIC timer (vector 48).
+    ; The interrupt frame sits above the 15 GPR pushes: [rsp+15*8] = vector.
+    cmp qword [rsp + 15*8], 48
+    jne .restore
+    mov rdi, rsp
+    call scheduler_switch_if_needed
+    mov rsp, rax        ; switch to new task's stack if needed
+
+.restore:
     pop r15
     pop r14
     pop r13
